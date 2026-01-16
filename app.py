@@ -876,20 +876,46 @@ def prepare_track_metadata(edit_info, original_path, bpm, base_url=""):
 import audio_processor
 
 # Detect if GPU is available for Demucs acceleration
-def get_demucs_device():
+def get_demucs_device(force_check=False):
     """Detect best device for Demucs (CUDA GPU or CPU)."""
     try:
         import torch
+        
+        # Force CUDA initialization
         if torch.cuda.is_available():
-            gpu_name = torch.cuda.get_device_name(0)
-            print(f"🚀 GPU détecté: {gpu_name} - Mode CUDA activé")
-            return 'cuda'
-    except:
-        pass
-    print("💻 Pas de GPU détecté - Mode CPU")
+            # Try to actually use CUDA to make sure it works
+            try:
+                torch.cuda.init()
+                device_count = torch.cuda.device_count()
+                if device_count > 0:
+                    gpu_name = torch.cuda.get_device_name(0)
+                    gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                    print(f"🚀 GPU détecté: {gpu_name} ({gpu_mem:.0f}GB) - Mode CUDA activé")
+                    print(f"   CUDA version: {torch.version.cuda}")
+                    print(f"   PyTorch version: {torch.__version__}")
+                    return 'cuda'
+            except Exception as e:
+                print(f"⚠️ CUDA disponible mais erreur d'init: {e}")
+        else:
+            print(f"⚠️ torch.cuda.is_available() = False")
+            print(f"   PyTorch version: {torch.__version__}")
+            print(f"   CUDA built: {torch.backends.cuda.is_built() if hasattr(torch.backends, 'cuda') else 'N/A'}")
+    except Exception as e:
+        print(f"❌ Erreur détection GPU: {e}")
+    
+    print("💻 Mode CPU activé")
     return 'cpu'
 
+# Detect device at startup
 DEMUCS_DEVICE = get_demucs_device()
+
+def ensure_cuda_device():
+    """Re-check CUDA availability (call before processing)."""
+    global DEMUCS_DEVICE
+    if DEMUCS_DEVICE == 'cpu':
+        # Try again in case CUDA wasn't ready at import time
+        DEMUCS_DEVICE = get_demucs_device(force_check=True)
+    return DEMUCS_DEVICE
 
 def create_edits(vocals_path, inst_path, original_path, base_output_path, base_filename):
     print(f"Loading audio for edits: {base_filename}")
@@ -1511,14 +1537,17 @@ def process_single_track(filepath, filename, session_id='global', worker_id=None
     # Get session-specific status
     current_status = get_job_status(session_id)
     
+    # Ensure CUDA is available (re-check in case it wasn't ready at startup)
+    device = ensure_cuda_device()
+    
     try:
         current_status['state'] = 'processing'
         current_status['current_filename'] = filename
         current_status['current_step'] = "Séparation IA (Demucs)..."
-        log_message(f"🚀 [{session_id}] Début traitement : {filename}", session_id)
+        log_message(f"🚀 [{session_id}] Début traitement : {filename} (Device: {device})", session_id)
         
         # Update queue tracker
-        update_queue_item(filename, status='processing', worker=worker_id, progress=0, step='Séparation IA...')
+        update_queue_item(filename, status='processing', worker=worker_id, progress=0, step=f'Séparation IA ({device})...')
         
         track_name = os.path.splitext(filename)[0]
         
@@ -1973,6 +2002,43 @@ def debug_url():
         'request_host': request.host,
         'request_url': request.url,
     })
+
+@app.route('/debug_gpu')
+def debug_gpu():
+    """Debug route to check GPU/CUDA status."""
+    info = {
+        'demucs_device': DEMUCS_DEVICE,
+        'cuda_available': False,
+        'cuda_version': None,
+        'pytorch_version': None,
+        'gpu_name': None,
+        'gpu_memory_gb': None,
+        'gpu_count': 0,
+        'error': None
+    }
+    
+    try:
+        import torch
+        info['pytorch_version'] = torch.__version__
+        info['cuda_available'] = torch.cuda.is_available()
+        
+        if hasattr(torch.version, 'cuda'):
+            info['cuda_version'] = torch.version.cuda
+        
+        if torch.cuda.is_available():
+            info['gpu_count'] = torch.cuda.device_count()
+            if info['gpu_count'] > 0:
+                info['gpu_name'] = torch.cuda.get_device_name(0)
+                props = torch.cuda.get_device_properties(0)
+                info['gpu_memory_gb'] = round(props.total_memory / (1024**3), 1)
+                
+                # Current memory usage
+                info['gpu_memory_allocated_gb'] = round(torch.cuda.memory_allocated(0) / (1024**3), 2)
+                info['gpu_memory_reserved_gb'] = round(torch.cuda.memory_reserved(0) / (1024**3), 2)
+    except Exception as e:
+        info['error'] = str(e)
+    
+    return jsonify(info)
 
 # Test route to check URL generation
 @app.route('/test_download')
