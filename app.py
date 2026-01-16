@@ -1595,6 +1595,11 @@ def process_single_track(filepath, filename, session_id='global', worker_id=None
                 filepath
             ]
             
+            # Log the exact command for debugging
+            cmd_str = ' '.join(cmd)
+            print(f"🔧 DEMUCS COMMAND: {cmd_str}")
+            log_message(f"🔧 Device: {device}, Jobs: {jobs}")
+            
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -1608,6 +1613,12 @@ def process_single_track(filepath, filename, session_id='global', worker_id=None
             for line in proc.stdout:
                 print(line, end='')
                 output_lines.append(line)
+                
+                # Check for CUDA/GPU related messages
+                line_lower = line.lower()
+                if 'cuda' in line_lower or 'gpu' in line_lower or 'cpu' in line_lower:
+                    log_message(f"🔍 Demucs: {line.strip()}")
+                
                 if "%|" in line:
                     try:
                         parts = line.split('%|')
