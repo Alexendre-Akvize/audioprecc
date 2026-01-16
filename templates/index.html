@@ -433,6 +433,10 @@
             to { transform: rotate(360deg); }
         }
 
+        .spin {
+            animation: spin 1s linear infinite;
+        }
+
         /* Sidebar */
         .sidebar {
             display: flex;
@@ -931,10 +935,16 @@
                             <div class="results-title">Processed Tracks</div>
                             <div class="results-count" id="resultsCount">0 tracks ready</div>
                         </div>
-                        <a href="/download_all_zip" class="btn btn-primary">
-                            <i data-lucide="archive"></i>
-                            Download All
-                        </a>
+                        <div style="display: flex; gap: 8px;">
+                            <button class="btn btn-ghost" onclick="clearResults()">
+                                <i data-lucide="trash-2"></i>
+                                Clear
+                            </button>
+                            <a href="/download_all_zip" class="btn btn-primary">
+                                <i data-lucide="archive"></i>
+                                Download All
+                            </a>
+                        </div>
                     </div>
                     <div id="resultsList"></div>
                 </div>
@@ -1034,11 +1044,13 @@
         lucide.createIcons();
 
         let selectedFiles = [];
-        let pollingInterval;
-        let statsInterval;
+        let pollingInterval = null;
+        let statsInterval = null;
         let numWorkers = 16;
         let processedCount = 0;
         let startTime = null;
+        let isUploading = false;
+        let lastResultsCount = 0;
 
         // DOM Elements
         const dropZone = document.getElementById('dropZone');
@@ -1169,33 +1181,50 @@
             handleNewFiles(files);
         });
 
-        // Form submit
+        // Form submit - allows continuous uploads
         document.getElementById('uploadForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             if (selectedFiles.length === 0) {
                 showToast('Please select at least one file');
                 return;
             }
+            
+            if (isUploading) {
+                showToast('Upload in progress, please wait...');
+                return;
+            }
 
+            isUploading = true;
             progressSection.classList.add('active');
             logPanel.classList.add('active');
             resultsSection.classList.add('active');
             submitBtn.disabled = true;
-            startTime = Date.now();
+            submitBtn.innerHTML = '<i data-lucide="loader-2" class="spin"></i> Uploading...';
+            lucide.createIcons();
+            
+            if (!startTime) startTime = Date.now();
 
             statusText.textContent = 'Uploading files...';
             progressLabel.textContent = 'Uploading';
 
-            startPolling();
-            startStatsPolling();
+            // Start polling if not already running
+            if (!pollingInterval) startPolling();
+            if (!statsInterval) startStatsPolling();
 
-            for (let i = 0; i < selectedFiles.length; i++) {
-                const file = selectedFiles[i];
-                const percent = Math.round((i / selectedFiles.length) * 100);
+            const filesToUpload = [...selectedFiles];
+            const totalFiles = filesToUpload.length;
+            
+            // Clear selection immediately so user can add more
+            selectedFiles = [];
+            updateFileList();
+
+            for (let i = 0; i < totalFiles; i++) {
+                const file = filesToUpload[i];
+                const percent = Math.round((i / totalFiles) * 100);
                 
                 progressFill.style.width = percent + '%';
                 progressValue.textContent = percent + '%';
-                statusText.textContent = `Uploading ${i + 1}/${selectedFiles.length}: ${file.name}`;
+                statusText.textContent = `Uploading ${i + 1}/${totalFiles}: ${file.name}`;
 
                 try {
                     const formData = new FormData();
@@ -1215,10 +1244,20 @@
             progressFill.style.width = '100%';
             progressValue.textContent = '100%';
             progressLabel.textContent = 'Processing';
-            statusText.textContent = 'All files uploaded. Processing in background...';
+            statusText.textContent = `${totalFiles} files queued. Processing in background...`;
+            
+            // Re-enable upload immediately - users can add more files while processing
+            isUploading = false;
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i data-lucide="plus"></i> Add More Files';
+            lucide.createIcons();
+            
+            showToast(`${totalFiles} files added to queue`);
         });
 
         function startPolling() {
+            if (pollingInterval) return; // Already polling
+            
             pollingInterval = setInterval(async () => {
                 try {
                     const res = await fetch('/status');
@@ -1228,6 +1267,7 @@
                     updateWorkersUI(status.active_workers || 0, numWorkers);
                     updateQueueUI(status.queue_size || 0, status.current_filename);
 
+                    // Update logs
                     if (status.logs?.length > 0) {
                         logContent.innerHTML = status.logs.slice(-50).map(log => 
                             `<div class="log-entry">${escapeHtml(log)}</div>`
@@ -1235,24 +1275,32 @@
                         logContent.scrollTop = logContent.scrollHeight;
                     }
 
+                    // Always update results if there are new ones
+                    if (status.results?.length > 0 && status.results.length !== lastResultsCount) {
+                        displayResults(status.results);
+                        lastResultsCount = status.results.length;
+                    }
+
+                    // Update status text based on state
                     if (status.state === 'processing') {
                         progressLabel.textContent = 'Processing';
-                        statusText.textContent = status.current_step || 'Processing...';
+                        let statusMsg = status.current_step || 'Processing...';
                         if (status.current_filename) {
-                            statusText.textContent += ` - ${status.current_filename}`;
+                            statusMsg += ` - ${status.current_filename}`;
                         }
-                    } else if (status.state === 'idle' && status.results?.length > 0) {
-                        displayResults(status.results);
-                        statusText.textContent = 'Ready for new files';
-                        resetForNewUpload();
-                    } else if (status.state === 'completed') {
-                        displayResults(status.results);
-                        statusText.textContent = 'All tracks processed';
-                        showToast('Processing complete');
-                        resetForNewUpload();
+                        if (status.queue_size > 0) {
+                            statusMsg += ` (${status.queue_size} in queue)`;
+                        }
+                        statusText.textContent = statusMsg;
+                    } else if (status.state === 'idle') {
+                        if (status.queue_size > 0) {
+                            statusText.textContent = `${status.queue_size} tracks waiting...`;
+                        } else {
+                            progressLabel.textContent = 'Ready';
+                            statusText.textContent = 'Ready for new files';
+                        }
                     } else if (status.state === 'error') {
                         statusText.textContent = 'Error: ' + status.error;
-                        resetForNewUpload();
                     }
                 } catch (e) {
                     console.error('Polling error:', e);
@@ -1378,7 +1426,10 @@
         }
 
         function resetForNewUpload() {
+            isUploading = false;
             submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i data-lucide="play"></i> Start Processing';
+            lucide.createIcons();
             selectedFiles = [];
             updateFileList();
             fileInput.value = '';
@@ -1400,6 +1451,21 @@
             setTimeout(() => toast.classList.remove('show'), 3000);
         }
 
+        async function clearResults() {
+            try {
+                await fetch('/clear_results', { method: 'POST' });
+                resultsList.innerHTML = '';
+                resultsCount.textContent = '0 tracks ready';
+                lastResultsCount = 0;
+                processedCount = 0;
+                startTime = null;
+                logContent.innerHTML = '';
+                showToast('Results cleared');
+            } catch (e) {
+                console.error('Clear error:', e);
+            }
+        }
+
         function escapeHtml(text) {
             const div = document.createElement('div');
             div.textContent = text;
@@ -1409,7 +1475,8 @@
         // Initialize workers grid
         updateWorkersUI(0, 16);
 
-        // Start stats polling on page load
+        // Start polling on page load for multi-user visibility
+        startPolling();
         startStatsPolling();
     </script>
 </body>
