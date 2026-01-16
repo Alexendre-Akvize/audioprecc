@@ -13,11 +13,11 @@ bind = "0.0.0.0:8888"
 backlog = 4096  # Increased for high concurrency
 
 # Worker Processes
-# With 240GB RAM, we can afford more Gunicorn workers
-# These handle HTTP requests while background threads do the heavy GPU work
-workers = 6
-worker_class = "sync"  # sync workers are fine since we offload to background threads
-threads = 4  # 4 threads per worker = 24 total HTTP handlers
+# IMPORTANT: For GPU workloads, use 1 worker to avoid CUDA memory conflicts
+# The actual parallelism happens in background threads within this single process
+workers = 1
+worker_class = "gthread"  # threaded worker for handling concurrent HTTP requests
+threads = 16  # Many threads for concurrent uploads/downloads
 
 # Worker timeout - increase for large file uploads and batch processing
 timeout = 600  # 10 minutes for very large batches
@@ -49,8 +49,8 @@ tmp_upload_dir = None
 # keyfile = "/path/to/key.pem"
 # certfile = "/path/to/cert.pem"
 
-# Preload app for faster worker startup
-preload_app = True
+# IMPORTANT: Don't preload - we need threads to start in the worker process
+preload_app = False
 
 # Hooks
 def on_starting(server):

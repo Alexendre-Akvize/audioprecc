@@ -21,7 +21,7 @@ echo -e "${CYAN}╚════════════════════�
 
 # Configuration - OPTIMIZED FOR H100 + 240GB RAM
 PORT=${PORT:-8888}
-WORKERS=${GUNICORN_WORKERS:-6}        # More Gunicorn workers for high RAM
+WORKERS=${GUNICORN_WORKERS:-1}        # Single worker for GPU (parallelism via threads)
 TIMEOUT=${GUNICORN_TIMEOUT:-600}      # 10 min timeout for batch uploads
 
 # Directory setup
@@ -96,10 +96,13 @@ echo -e "${BLUE}   Timeout: ${TIMEOUT}s${NC}"
 echo ""
 
 # Start with Gunicorn for production
+# Using gthread worker with 1 process + many threads for GPU workloads
 exec gunicorn \
     --config gunicorn_config.py \
     --bind "0.0.0.0:$PORT" \
     --workers "$WORKERS" \
+    --worker-class gthread \
+    --threads 16 \
     --timeout "$TIMEOUT" \
     --access-logfile - \
     --error-logfile - \
