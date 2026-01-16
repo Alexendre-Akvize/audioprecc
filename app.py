@@ -1375,6 +1375,53 @@ print(f"🔧 Configuration: {CPU_COUNT} CPUs détectés → {NUM_WORKERS} worker
 # Global Queue for processing tracks
 track_queue = queue.Queue()
 
+# Track queue items with status for UI display
+# Structure: { "filename": { "status": "waiting|processing|done", "worker": None|worker_id, "progress": 0-100 } }
+queue_items = {}
+queue_items_lock = Lock()
+
+def add_to_queue_tracker(filename, session_id):
+    """Add item to queue tracker for UI display."""
+    with queue_items_lock:
+        queue_items[filename] = {
+            'status': 'waiting',
+            'worker': None,
+            'progress': 0,
+            'session_id': session_id,
+            'step': 'En attente...'
+        }
+
+def update_queue_item(filename, status=None, worker=None, progress=None, step=None):
+    """Update queue item status."""
+    with queue_items_lock:
+        if filename in queue_items:
+            if status: queue_items[filename]['status'] = status
+            if worker is not None: queue_items[filename]['worker'] = worker
+            if progress is not None: queue_items[filename]['progress'] = progress
+            if step: queue_items[filename]['step'] = step
+
+def remove_from_queue_tracker(filename):
+    """Remove item from queue tracker."""
+    with queue_items_lock:
+        if filename in queue_items:
+            del queue_items[filename]
+
+def get_queue_items_list():
+    """Get list of queue items for UI."""
+    with queue_items_lock:
+        items = []
+        for filename, info in queue_items.items():
+            items.append({
+                'filename': filename,
+                'status': info['status'],
+                'worker': info['worker'],
+                'progress': info['progress'],
+                'step': info['step']
+            })
+        # Sort: processing first, then waiting
+        items.sort(key=lambda x: (0 if x['status'] == 'processing' else 1, x['filename']))
+        return items
+
 # Worker thread function
 def worker(worker_id):
     while True:
@@ -1405,6 +1452,7 @@ def worker(worker_id):
             # Check if file exists
             if not os.path.exists(filepath):
                 log_message(f"⚠️ Fichier introuvable (ignoré) : {filename}", session_id)
+                remove_from_queue_tracker(filename)
                 track_queue.task_done()
                 if track_queue.empty():
                     current_status['state'] = 'idle'
@@ -1412,9 +1460,14 @@ def worker(worker_id):
                     current_status['current_filename'] = ''
                 continue
 
-            print(f"🔄 Worker {worker_id} traite: {filename}")
-            process_single_track(filepath, filename, session_id)
+            # Update tracker: now processing
+            update_queue_item(filename, status='processing', worker=worker_id, progress=0, step='Démarrage...')
             
+            print(f"🔄 Worker {worker_id} traite: {filename}")
+            process_single_track(filepath, filename, session_id, worker_id)
+            
+            # Remove from tracker when done
+            remove_from_queue_tracker(filename)
             track_queue.task_done()
             
             # Reset state to idle if queue is empty
@@ -1454,7 +1507,7 @@ def restore_queue():
 restore_queue()
 
 # Modified process function for SINGLE track
-def process_single_track(filepath, filename, session_id='global'):
+def process_single_track(filepath, filename, session_id='global', worker_id=None):
     # Get session-specific status
     current_status = get_job_status(session_id)
     
@@ -1463,6 +1516,9 @@ def process_single_track(filepath, filename, session_id='global'):
         current_status['current_filename'] = filename
         current_status['current_step'] = "Séparation IA (Demucs)..."
         log_message(f"🚀 [{session_id}] Début traitement : {filename}", session_id)
+        
+        # Update queue tracker
+        update_queue_item(filename, status='processing', worker=worker_id, progress=0, step='Séparation IA...')
         
         track_name = os.path.splitext(filename)[0]
         
@@ -1532,6 +1588,8 @@ def process_single_track(filepath, filename, session_id='global'):
                             if p_match:
                                 track_percent = int(p_match.group(1))
                                 current_status['progress'] = int(track_percent * 0.7)
+                                # Update queue tracker with progress
+                                update_queue_item(filename, progress=int(track_percent * 0.7), step=f'Séparation IA {track_percent}%')
                     except:
                         pass
             
@@ -1557,6 +1615,7 @@ def process_single_track(filepath, filename, session_id='global'):
         # 2. Generate edits (Main, Acapella, Instrumental)
         current_status['current_step'] = "Génération des versions..."
         current_status['progress'] = 70
+        update_queue_item(filename, progress=70, step='Export MP3/WAV...')
         
         clean_name, _ = clean_filename(filename)
         track_output_dir = os.path.join(PROCESSED_FOLDER, clean_name)
@@ -1568,7 +1627,9 @@ def process_single_track(filepath, filename, session_id='global'):
         vocals_path = os.path.join(source_dir, 'vocals.mp3')
         
         if os.path.exists(inst_path) and os.path.exists(vocals_path):
+            update_queue_item(filename, progress=80, step='Création des versions...')
             edits = create_edits(vocals_path, inst_path, filepath, track_output_dir, filename)
+            update_queue_item(filename, progress=100, step='Terminé')
             
             # Add to session-specific results
             current_status['results'].append({
@@ -1601,6 +1662,9 @@ def enqueue_file():
     session_id = get_session_id()
     
     if filename:
+        # Add to queue tracker for UI display
+        add_to_queue_tracker(filename, session_id)
+        
         # Queue item includes session_id for multi-user support
         track_queue.put({'filename': filename, 'session_id': session_id})
         q_size = track_queue.qsize()
@@ -1690,6 +1754,7 @@ def status():
     current_status['queue_size'] = track_queue.qsize()
     current_status['num_workers'] = NUM_WORKERS
     current_status['active_workers'] = sum(1 for t in worker_threads if t.is_alive())
+    current_status['queue_items'] = get_queue_items_list()
     
     # Return session-specific status
     return jsonify(current_status)
@@ -1990,6 +2055,10 @@ def cleanup_files():
         # Clear Queue (drain it)
         with track_queue.mutex:
             track_queue.queue.clear()
+        
+        # Clear queue tracker
+        with queue_items_lock:
+            queue_items.clear()
             
         print("🧹 FULL RESET: All files and results cleared")
         return jsonify({'message': 'Cleanup successful', 'results_cleared': True})

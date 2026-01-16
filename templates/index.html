@@ -12,7 +12,7 @@
             font-weight: 200 700;
             font-display: swap;
         }
-
+        
         :root {
             --bg-primary: #09090b;
             --bg-secondary: #18181b;
@@ -107,7 +107,7 @@
         .version {
             font-size: 12px;
             color: var(--text-muted);
-            font-weight: 400;
+            font-weight: 400; 
         }
 
         /* System Stats Bar */
@@ -464,6 +464,8 @@
             display: flex;
             flex-direction: column;
             gap: 8px;
+            max-height: 400px;
+            overflow-y: auto;
         }
 
         .queue-item {
@@ -892,7 +894,7 @@
                                 </div>
                                 <input type="file" id="fileInput" accept=".mp3" multiple>
                                 <input type="file" id="folderInput" webkitdirectory directory multiple>
-                            </div>
+        </div>
 
                             <div id="fileListSection" style="display: none;">
                                 <div class="file-count">
@@ -900,8 +902,8 @@
                                     <span class="file-count-value" id="fileCount">0 files</span>
                                 </div>
                                 <div class="file-list" id="fileList"></div>
-                            </div>
-
+            </div>
+            
                             <div class="progress-section" id="progressSection">
                                 <div class="progress-header">
                                     <span class="progress-label" id="progressLabel">Uploading...</span>
@@ -914,8 +916,8 @@
                                     <i data-lucide="loader-2"></i>
                                     <span id="statusText">Initializing...</span>
                                 </div>
-                            </div>
-
+            </div>
+            
                             <div class="log-panel" id="logPanel">
                                 <div class="log-content" id="logContent"></div>
                             </div>
@@ -924,7 +926,7 @@
                                 <i data-lucide="play"></i>
                                 Start Processing
                             </button>
-                        </form>
+        </form>
                     </div>
                 </div>
 
@@ -934,7 +936,7 @@
                         <div>
                             <div class="results-title">Processed Tracks</div>
                             <div class="results-count" id="resultsCount">0 tracks ready</div>
-                        </div>
+            </div>
                         <div style="display: flex; gap: 8px;">
                             <button class="btn btn-ghost" onclick="clearResults()">
                                 <i data-lucide="trash-2"></i>
@@ -963,8 +965,8 @@
                     </div>
                     <div class="card-body">
                         <div class="workers-grid" id="workersGrid"></div>
-                    </div>
-                </div>
+        </div>
+    </div>
 
                 <!-- Queue -->
                 <div class="card">
@@ -990,8 +992,8 @@
                         <div class="card-title">
                             <i data-lucide="gauge"></i>
                             System
-                        </div>
-                    </div>
+                </div>
+            </div>
                     <div class="card-body">
                         <div class="stats-grid">
                             <div class="stat-box">
@@ -1037,12 +1039,12 @@
     <div class="toast" id="toast">
         <i data-lucide="check-circle"></i>
         <span id="toastMessage">Success</span>
-    </div>
+        </div>
 
     <script>
         // Initialize Lucide icons
         lucide.createIcons();
-
+    
         let selectedFiles = [];
         let pollingInterval = null;
         let statsInterval = null;
@@ -1102,7 +1104,7 @@
             fileList.innerHTML = '';
             const limit = 20;
             selectedFiles.slice(0, limit).forEach(file => {
-                const item = document.createElement('div');
+                    const item = document.createElement('div');
                 item.className = 'file-item';
                 item.innerHTML = `
                     <i data-lucide="file-audio"></i>
@@ -1111,8 +1113,8 @@
                 fileList.appendChild(item);
             });
             
-            if (selectedFiles.length > limit) {
-                const more = document.createElement('div');
+                if (selectedFiles.length > limit) {
+                    const more = document.createElement('div');
                 more.className = 'file-item';
                 more.innerHTML = `<i data-lucide="more-horizontal"></i><span class="file-name">and ${selectedFiles.length - limit} more...</span>`;
                 fileList.appendChild(more);
@@ -1124,8 +1126,8 @@
         // Drag & Drop
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(event => {
             dropZone.addEventListener(event, (e) => {
-                e.preventDefault();
-                e.stopPropagation();
+            e.preventDefault();
+            e.stopPropagation();
             });
         });
 
@@ -1140,7 +1142,7 @@
         dropZone.addEventListener('drop', async (e) => {
             const items = e.dataTransfer.items;
             let files = [];
-            
+
             if (items) {
                 const queue = [];
                 for (let i = 0; i < items.length; i++) {
@@ -1188,7 +1190,7 @@
                 showToast('Please select at least one file');
                 return;
             }
-            
+
             if (isUploading) {
                 showToast('Upload in progress, please wait...');
                 return;
@@ -1225,7 +1227,7 @@
                 progressFill.style.width = percent + '%';
                 progressValue.textContent = percent + '%';
                 statusText.textContent = `Uploading ${i + 1}/${totalFiles}: ${file.name}`;
-
+                
                 try {
                     const formData = new FormData();
                     formData.append('file', file);
@@ -1265,7 +1267,7 @@
 
                     numWorkers = status.num_workers || 16;
                     updateWorkersUI(status.active_workers || 0, numWorkers);
-                    updateQueueUI(status.queue_size || 0, status.current_filename);
+                    updateQueueUI(status.queue_items || []);
 
                     // Update logs
                     if (status.logs?.length > 0) {
@@ -1355,56 +1357,73 @@
             }
         }
 
-        function updateQueueUI(count, currentFile) {
-            document.getElementById('queueCount').textContent = count;
+        function updateQueueUI(queueItems) {
             const queueList = document.getElementById('queueList');
+            const items = queueItems || [];
             
-            if (count === 0 && !currentFile) {
+            document.getElementById('queueCount').textContent = items.length;
+            
+            if (items.length === 0) {
                 queueList.innerHTML = '<div class="queue-empty">No tracks in queue</div>';
-            } else {
-                let html = '';
-                if (currentFile) {
-                    html += `
-                        <div class="queue-item">
-                            <div class="queue-item-status processing"></div>
-                            <span class="queue-item-name">${escapeHtml(currentFile)}</span>
-                            <span class="queue-item-badge">Processing</span>
-                        </div>
-                    `;
-                }
-                for (let i = 0; i < Math.min(count, 5); i++) {
-                    html += `
-                        <div class="queue-item">
-                            <div class="queue-item-status waiting"></div>
-                            <span class="queue-item-name">Waiting...</span>
-                            <span class="queue-item-badge">#${i + 1}</span>
-                        </div>
-                    `;
-                }
-                if (count > 5) {
-                    html += `<div class="queue-item"><span class="queue-item-name" style="text-align:center;width:100%;color:var(--text-muted)">+${count - 5} more in queue</span></div>`;
-                }
-                queueList.innerHTML = html;
+                return;
             }
+            
+            let html = '';
+            const maxDisplay = 10;
+            
+            items.slice(0, maxDisplay).forEach((item, index) => {
+                const isProcessing = item.status === 'processing';
+                const statusClass = isProcessing ? 'processing' : 'waiting';
+                const progress = item.progress || 0;
+                const step = item.step || (isProcessing ? 'Processing...' : 'Waiting...');
+                const workerInfo = item.worker ? `W${item.worker}` : '';
+                
+                html += `
+                    <div class="queue-item" style="flex-direction: column; align-items: stretch; gap: 8px;">
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <div class="queue-item-status ${statusClass}"></div>
+                            <span class="queue-item-name" style="flex: 1;">${escapeHtml(item.filename)}</span>
+                            ${workerInfo ? `<span class="queue-item-badge">${workerInfo}</span>` : ''}
+                        </div>
+                        ${isProcessing ? `
+                            <div style="display: flex; align-items: center; gap: 8px; padding-left: 20px;">
+                                <div style="flex: 1; height: 3px; background: var(--bg-tertiary); border-radius: 2px; overflow: hidden;">
+                                    <div style="width: ${progress}%; height: 100%; background: var(--accent); transition: width 0.3s;"></div>
+                                </div>
+                                <span style="font-size: 11px; color: var(--text-muted); min-width: 35px;">${progress}%</span>
+                            </div>
+                            <div style="font-size: 11px; color: var(--text-muted); padding-left: 20px;">${escapeHtml(step)}</div>
+                        ` : `
+                            <div style="font-size: 11px; color: var(--text-muted); padding-left: 20px;">#${index + 1} in queue</div>
+                        `}
+                    </div>
+                `;
+            });
+            
+            if (items.length > maxDisplay) {
+                html += `<div class="queue-item"><span class="queue-item-name" style="text-align:center;width:100%;color:var(--text-muted)">+${items.length - maxDisplay} more in queue</span></div>`;
+            }
+            
+            queueList.innerHTML = html;
         }
 
         function displayResults(results) {
             processedCount = results.length;
             resultsCount.textContent = `${results.length} tracks ready`;
             resultsList.innerHTML = '';
-
+            
             results.forEach(track => {
                 const card = document.createElement('div');
                 card.className = 'track-card';
                 
                 let editsHtml = track.edits.map(edit => `
-                    <div class="edit-item">
+                        <div class="edit-item">
                         <span class="edit-name">${escapeHtml(edit.name)}</span>
                         <div class="edit-actions">
                             <a href="${edit.mp3}" class="dl-btn dl-btn-mp3" download>MP3</a>
                             <a href="${edit.wav}" class="dl-btn dl-btn-wav" download>WAV</a>
+                            </div>
                         </div>
-                    </div>
                 `).join('');
 
                 card.innerHTML = `
