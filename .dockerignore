@@ -1,0 +1,10 @@
+# Ignorer les dossiers lourds et inutiles pour le Docker
+uploads/
+output/
+processed/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+.DS_Store
+terminals/

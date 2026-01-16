@@ -1,0 +1,27 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Audio files (generated/uploaded)
+uploads/
+output/
+processed/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+nohup.out

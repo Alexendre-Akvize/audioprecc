@@ -1,0 +1,1416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ID By Rivoli</title>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @font-face {
+            font-family: 'ClashGrotesk';
+            src: url('/static/fonts/ClashGrotesk-Variable.ttf') format('truetype');
+            font-weight: 200 700;
+            font-display: swap;
+        }
+
+        :root {
+            --bg-primary: #09090b;
+            --bg-secondary: #18181b;
+            --bg-tertiary: #27272a;
+            --bg-card: rgba(24, 24, 27, 0.8);
+            --border: #27272a;
+            --border-hover: #3f3f46;
+            --text-primary: #fafafa;
+            --text-secondary: #a1a1aa;
+            --text-muted: #71717a;
+            --accent: #fafafa;
+            --accent-muted: rgba(250, 250, 250, 0.1);
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --error: #ef4444;
+            --radius: 12px;
+            --radius-sm: 8px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'ClashGrotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Subtle grid pattern */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background-image: 
+                linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+            background-size: 64px 64px;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .app {
+            position: relative;
+            z-index: 1;
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 32px 24px;
+        }
+
+        /* Header */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 48px;
+            padding-bottom: 24px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-mark {
+            width: 40px;
+            height: 40px;
+            background: var(--accent);
+            border-radius: var(--radius-sm);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .logo-mark svg {
+            color: var(--bg-primary);
+        }
+
+        .logo-text {
+            font-size: 20px;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+        }
+
+        .version {
+            font-size: 12px;
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+
+        /* System Stats Bar */
+        .stats-bar {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .stat-chip {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 14px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 100px;
+            font-size: 13px;
+            backdrop-filter: blur(8px);
+        }
+
+        .stat-chip svg {
+            width: 14px;
+            height: 14px;
+            color: var(--text-muted);
+        }
+
+        .stat-value {
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .stat-label {
+            color: var(--text-muted);
+        }
+
+        .stat-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--success);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Main Layout */
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr 380px;
+            gap: 24px;
+        }
+
+        @media (max-width: 1024px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Cards */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            backdrop-filter: blur(8px);
+            overflow: hidden;
+        }
+
+        .card-header {
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .card-title {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .card-title svg {
+            width: 16px;
+            height: 16px;
+            color: var(--text-muted);
+        }
+
+        .card-body {
+            padding: 24px;
+        }
+
+        /* Upload Zone */
+        .upload-zone {
+            border: 1px dashed var(--border);
+            border-radius: var(--radius-sm);
+            padding: 48px 24px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            background: transparent;
+        }
+
+        .upload-zone:hover,
+        .upload-zone.dragover {
+            border-color: var(--accent);
+            background: var(--accent-muted);
+        }
+
+        .upload-icon {
+            width: 48px;
+            height: 48px;
+            margin: 0 auto 16px;
+            padding: 12px;
+            background: var(--bg-tertiary);
+            border-radius: var(--radius-sm);
+            color: var(--text-muted);
+        }
+
+        .upload-title {
+            font-size: 15px;
+            font-weight: 500;
+            margin-bottom: 6px;
+        }
+
+        .upload-subtitle {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .upload-actions {
+            margin-top: 20px;
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+        }
+
+        /* Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px 18px;
+            font-size: 13px;
+            font-weight: 500;
+            font-family: inherit;
+            border-radius: var(--radius-sm);
+            border: none;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .btn svg {
+            width: 14px;
+            height: 14px;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: var(--bg-primary);
+        }
+
+        .btn-primary:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            background: var(--border);
+        }
+
+        .btn-ghost {
+            background: transparent;
+            color: var(--text-secondary);
+        }
+
+        .btn-ghost:hover {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .btn-full {
+            width: 100%;
+            padding: 14px 24px;
+            font-size: 14px;
+            margin-top: 20px;
+        }
+
+        /* File List */
+        .file-list {
+            margin-top: 20px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .file-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .file-item:hover {
+            background: var(--bg-tertiary);
+        }
+
+        .file-item svg {
+            width: 14px;
+            height: 14px;
+            color: var(--text-muted);
+            flex-shrink: 0;
+        }
+
+        .file-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .file-count {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 12px;
+        }
+
+        .file-count-label {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .file-count-value {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        /* Progress */
+        .progress-section {
+            display: none;
+            margin-top: 24px;
+        }
+
+        .progress-section.active {
+            display: block;
+        }
+
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .progress-label {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .progress-value {
+            font-size: 13px;
+            font-weight: 500;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .progress-bar {
+            height: 4px;
+            background: var(--bg-tertiary);
+            border-radius: 100px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--accent);
+            width: 0%;
+            transition: width 0.3s ease;
+            border-radius: 100px;
+        }
+
+        .progress-status {
+            margin-top: 12px;
+            font-size: 12px;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .progress-status svg {
+            width: 12px;
+            height: 12px;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        /* Sidebar */
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        /* Queue Card */
+        .queue-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .queue-count {
+            background: var(--bg-tertiary);
+            padding: 2px 8px;
+            border-radius: 100px;
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--text-muted);
+        }
+
+        .queue-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .queue-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            background: var(--bg-primary);
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+        }
+
+        .queue-item-status {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .queue-item-status.processing {
+            background: var(--warning);
+            animation: pulse 1s infinite;
+        }
+
+        .queue-item-status.waiting {
+            background: var(--text-muted);
+        }
+
+        .queue-item-status.done {
+            background: var(--success);
+        }
+
+        .queue-item-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: var(--text-secondary);
+        }
+
+        .queue-item-badge {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 100px;
+            background: var(--bg-tertiary);
+            color: var(--text-muted);
+        }
+
+        .queue-empty {
+            padding: 32px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        /* Workers Card */
+        .workers-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+        }
+
+        .worker-cell {
+            aspect-ratio: 1;
+            border-radius: var(--radius-sm);
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--text-muted);
+            transition: all 0.2s ease;
+        }
+
+        .worker-cell.active {
+            background: var(--accent-muted);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .worker-cell.busy {
+            background: rgba(245, 158, 11, 0.1);
+            border-color: var(--warning);
+            color: var(--warning);
+        }
+
+        /* Stats Card */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .stat-box {
+            padding: 16px;
+            background: var(--bg-primary);
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+        }
+
+        .stat-box-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .stat-box-header svg {
+            width: 14px;
+            height: 14px;
+            color: var(--text-muted);
+        }
+
+        .stat-box-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .stat-box-value {
+            font-size: 24px;
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .stat-box-sub {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        /* Results Section */
+        .results-section {
+            display: none;
+            margin-top: 32px;
+        }
+
+        .results-section.active {
+            display: block;
+        }
+
+        .results-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .results-title {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .results-count {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .track-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            margin-bottom: 12px;
+            overflow: hidden;
+        }
+
+        .track-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .track-icon {
+            width: 36px;
+            height: 36px;
+            background: var(--bg-tertiary);
+            border-radius: var(--radius-sm);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .track-icon svg {
+            width: 18px;
+            height: 18px;
+            color: var(--text-muted);
+        }
+
+        .track-info {
+            flex: 1;
+        }
+
+        .track-name {
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .track-meta {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .track-edits {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        }
+
+        .edit-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .edit-item:last-child {
+            border-bottom: none;
+        }
+
+        .edit-name {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .edit-actions {
+            display: flex;
+            gap: 6px;
+        }
+
+        .dl-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 6px 12px;
+            font-size: 11px;
+            font-weight: 500;
+            font-family: inherit;
+            border-radius: 6px;
+            text-decoration: none;
+            transition: all 0.15s ease;
+        }
+
+        .dl-btn-mp3 {
+            background: var(--accent);
+            color: var(--bg-primary);
+        }
+
+        .dl-btn-mp3:hover {
+            opacity: 0.9;
+        }
+
+        .dl-btn-wav {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+        }
+
+        .dl-btn-wav:hover {
+            background: var(--bg-tertiary);
+            border-color: var(--border-hover);
+        }
+
+        /* Log Panel */
+        .log-panel {
+            display: none;
+            margin-top: 16px;
+        }
+
+        .log-panel.active {
+            display: block;
+        }
+
+        .log-content {
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 12px;
+            max-height: 160px;
+            overflow-y: auto;
+            font-family: 'SF Mono', 'Monaco', 'Inconsolata', monospace;
+            font-size: 11px;
+            line-height: 1.6;
+        }
+
+        .log-entry {
+            color: var(--text-muted);
+            padding: 2px 0;
+        }
+
+        .log-entry.success {
+            color: var(--success);
+        }
+
+        .log-entry.error {
+            color: var(--error);
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 100px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--border-hover);
+        }
+
+        /* Toast */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 14px 20px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+
+        .toast.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+
+        .toast svg {
+            width: 16px;
+            height: 16px;
+        }
+
+        .toast.success svg {
+            color: var(--success);
+        }
+
+        /* Hidden inputs */
+        input[type="file"] {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <div class="logo-mark">
+                    <i data-lucide="audio-waveform" width="20" height="20"></i>
+                </div>
+                <div>
+                    <div class="logo-text">ID By Rivoli</div>
+                    <div class="version">{{ version_info }}</div>
+                </div>
+            </div>
+            <div class="stats-bar" id="statsBar">
+                <div class="stat-chip">
+                    <i data-lucide="cpu"></i>
+                    <span class="stat-value" id="cpuValue">--</span>
+                    <span class="stat-label">CPU</span>
+                </div>
+                <div class="stat-chip">
+                    <i data-lucide="hard-drive"></i>
+                    <span class="stat-value" id="ramValue">--</span>
+                    <span class="stat-label">RAM</span>
+                </div>
+                <div class="stat-chip" id="gpuChip" style="display: none;">
+                    <div class="stat-dot"></div>
+                    <span class="stat-value" id="gpuValue">H100</span>
+                    <span class="stat-label" id="gpuMem">80GB</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <div class="main-grid">
+            <!-- Left Column: Upload & Results -->
+            <div class="main-content">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <i data-lucide="upload-cloud"></i>
+                            Upload Audio Files
+                        </div>
+                        <button class="btn btn-ghost" onclick="clearFiles()" id="clearBtn" style="display: none;">
+                            <i data-lucide="trash-2"></i>
+                            Clear
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <form id="uploadForm">
+                            <div class="upload-zone" id="dropZone">
+                                <div class="upload-icon">
+                                    <i data-lucide="music"></i>
+                                </div>
+                                <div class="upload-title">Drop MP3 files or folders here</div>
+                                <div class="upload-subtitle">or click to browse</div>
+                                <div class="upload-actions">
+                                    <button type="button" class="btn btn-secondary" onclick="document.getElementById('fileInput').click()">
+                                        <i data-lucide="file-audio"></i>
+                                        Select Files
+                                    </button>
+                                    <button type="button" class="btn btn-secondary" onclick="document.getElementById('folderInput').click()">
+                                        <i data-lucide="folder"></i>
+                                        Select Folder
+                                    </button>
+                                </div>
+                                <input type="file" id="fileInput" accept=".mp3" multiple>
+                                <input type="file" id="folderInput" webkitdirectory directory multiple>
+                            </div>
+
+                            <div id="fileListSection" style="display: none;">
+                                <div class="file-count">
+                                    <span class="file-count-label">Selected files</span>
+                                    <span class="file-count-value" id="fileCount">0 files</span>
+                                </div>
+                                <div class="file-list" id="fileList"></div>
+                            </div>
+
+                            <div class="progress-section" id="progressSection">
+                                <div class="progress-header">
+                                    <span class="progress-label" id="progressLabel">Uploading...</span>
+                                    <span class="progress-value" id="progressValue">0%</span>
+                                </div>
+                                <div class="progress-bar">
+                                    <div class="progress-fill" id="progressFill"></div>
+                                </div>
+                                <div class="progress-status" id="progressStatus">
+                                    <i data-lucide="loader-2"></i>
+                                    <span id="statusText">Initializing...</span>
+                                </div>
+                            </div>
+
+                            <div class="log-panel" id="logPanel">
+                                <div class="log-content" id="logContent"></div>
+                            </div>
+
+                            <button type="submit" class="btn btn-primary btn-full" id="submitBtn">
+                                <i data-lucide="play"></i>
+                                Start Processing
+                            </button>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Results -->
+                <div class="results-section" id="resultsSection">
+                    <div class="results-header">
+                        <div>
+                            <div class="results-title">Processed Tracks</div>
+                            <div class="results-count" id="resultsCount">0 tracks ready</div>
+                        </div>
+                        <a href="/download_all_zip" class="btn btn-primary">
+                            <i data-lucide="archive"></i>
+                            Download All
+                        </a>
+                    </div>
+                    <div id="resultsList"></div>
+                </div>
+            </div>
+
+            <!-- Right Column: Sidebar -->
+            <div class="sidebar">
+                <!-- Workers -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <i data-lucide="boxes"></i>
+                            Workers
+                        </div>
+                        <span class="queue-count" id="workersActive">0 / 16</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="workers-grid" id="workersGrid"></div>
+                    </div>
+                </div>
+
+                <!-- Queue -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="queue-header">
+                            <div class="card-title">
+                                <i data-lucide="list-ordered"></i>
+                                Queue
+                            </div>
+                            <span class="queue-count" id="queueCount">0</span>
+                        </div>
+                    </div>
+                    <div class="card-body" style="padding: 12px;">
+                        <div class="queue-list" id="queueList">
+                            <div class="queue-empty">No tracks in queue</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- System Stats -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <i data-lucide="gauge"></i>
+                            System
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="stats-grid">
+                            <div class="stat-box">
+                                <div class="stat-box-header">
+                                    <i data-lucide="zap"></i>
+                                    <span class="stat-box-label">GPU</span>
+                                </div>
+                                <div class="stat-box-value" id="gpuUsage">--%</div>
+                                <div class="stat-box-sub" id="gpuName">Detecting...</div>
+                            </div>
+                            <div class="stat-box">
+                                <div class="stat-box-header">
+                                    <i data-lucide="database"></i>
+                                    <span class="stat-box-label">Memory</span>
+                                </div>
+                                <div class="stat-box-value" id="memUsage">--%</div>
+                                <div class="stat-box-sub" id="memAvail">-- GB available</div>
+                            </div>
+                            <div class="stat-box">
+                                <div class="stat-box-header">
+                                    <i data-lucide="hard-drive"></i>
+                                    <span class="stat-box-label">Disk</span>
+                                </div>
+                                <div class="stat-box-value" id="diskUsage">--%</div>
+                                <div class="stat-box-sub" id="diskFree">-- GB free</div>
+                            </div>
+                            <div class="stat-box">
+                                <div class="stat-box-header">
+                                    <i data-lucide="activity"></i>
+                                    <span class="stat-box-label">Throughput</span>
+                                </div>
+                                <div class="stat-box-value" id="throughput">--</div>
+                                <div class="stat-box-sub">tracks/min</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast">
+        <i data-lucide="check-circle"></i>
+        <span id="toastMessage">Success</span>
+    </div>
+
+    <script>
+        // Initialize Lucide icons
+        lucide.createIcons();
+
+        let selectedFiles = [];
+        let pollingInterval;
+        let statsInterval;
+        let numWorkers = 16;
+        let processedCount = 0;
+        let startTime = null;
+
+        // DOM Elements
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const folderInput = document.getElementById('folderInput');
+        const fileList = document.getElementById('fileList');
+        const fileListSection = document.getElementById('fileListSection');
+        const fileCount = document.getElementById('fileCount');
+        const clearBtn = document.getElementById('clearBtn');
+        const submitBtn = document.getElementById('submitBtn');
+        const progressSection = document.getElementById('progressSection');
+        const progressFill = document.getElementById('progressFill');
+        const progressValue = document.getElementById('progressValue');
+        const progressLabel = document.getElementById('progressLabel');
+        const statusText = document.getElementById('statusText');
+        const logPanel = document.getElementById('logPanel');
+        const logContent = document.getElementById('logContent');
+        const resultsSection = document.getElementById('resultsSection');
+        const resultsList = document.getElementById('resultsList');
+        const resultsCount = document.getElementById('resultsCount');
+        const workersGrid = document.getElementById('workersGrid');
+
+        // File handling
+        fileInput.addEventListener('change', (e) => handleNewFiles(Array.from(e.target.files)));
+        folderInput.addEventListener('change', (e) => handleNewFiles(Array.from(e.target.files)));
+
+        function handleNewFiles(files) {
+            const mp3s = files.filter(f => f.name.toLowerCase().endsWith('.mp3'));
+            mp3s.forEach(file => {
+                if (!selectedFiles.some(f => f.name === file.name && f.size === file.size)) {
+                    selectedFiles.push(file);
+                }
+            });
+            updateFileList();
+        }
+
+        function clearFiles() {
+            selectedFiles = [];
+            updateFileList();
+            fileInput.value = '';
+            folderInput.value = '';
+        }
+
+        function updateFileList() {
+            fileCount.textContent = `${selectedFiles.length} files`;
+            fileListSection.style.display = selectedFiles.length > 0 ? 'block' : 'none';
+            clearBtn.style.display = selectedFiles.length > 0 ? 'flex' : 'none';
+            
+            fileList.innerHTML = '';
+            const limit = 20;
+            selectedFiles.slice(0, limit).forEach(file => {
+                const item = document.createElement('div');
+                item.className = 'file-item';
+                item.innerHTML = `
+                    <i data-lucide="file-audio"></i>
+                    <span class="file-name">${file.name}</span>
+                `;
+                fileList.appendChild(item);
+            });
+            
+            if (selectedFiles.length > limit) {
+                const more = document.createElement('div');
+                more.className = 'file-item';
+                more.innerHTML = `<i data-lucide="more-horizontal"></i><span class="file-name">and ${selectedFiles.length - limit} more...</span>`;
+                fileList.appendChild(more);
+            }
+            
+            lucide.createIcons();
+        }
+
+        // Drag & Drop
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(event => {
+            dropZone.addEventListener(event, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+            });
+        });
+
+        ['dragenter', 'dragover'].forEach(event => {
+            dropZone.addEventListener(event, () => dropZone.classList.add('dragover'));
+        });
+
+        ['dragleave', 'drop'].forEach(event => {
+            dropZone.addEventListener(event, () => dropZone.classList.remove('dragover'));
+        });
+
+        dropZone.addEventListener('drop', async (e) => {
+            const items = e.dataTransfer.items;
+            let files = [];
+            
+            if (items) {
+                const queue = [];
+                for (let i = 0; i < items.length; i++) {
+                    const item = items[i];
+                    if (item.kind === 'file') {
+                        const entry = item.webkitGetAsEntry?.();
+                        if (entry) queue.push(entry);
+                        else {
+                            const file = item.getAsFile();
+                            if (file) files.push(file);
+                        }
+                    }
+                }
+                
+                while (queue.length > 0) {
+                    const entry = queue.shift();
+                    if (entry.isFile) {
+                        files.push(await new Promise(r => entry.file(r)));
+                    } else if (entry.isDirectory) {
+                        const entries = await new Promise(r => {
+                            const reader = entry.createReader();
+                            const results = [];
+                            const readEntries = () => {
+                                reader.readEntries(e => {
+                                    if (!e.length) r(results);
+                                    else { results.push(...e); readEntries(); }
+                                });
+                            };
+                            readEntries();
+                        });
+                        queue.push(...entries);
+                    }
+                }
+            } else {
+                files = Array.from(e.dataTransfer.files);
+            }
+            
+            handleNewFiles(files);
+        });
+
+        // Form submit
+        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (selectedFiles.length === 0) {
+                showToast('Please select at least one file');
+                return;
+            }
+
+            progressSection.classList.add('active');
+            logPanel.classList.add('active');
+            resultsSection.classList.add('active');
+            submitBtn.disabled = true;
+            startTime = Date.now();
+
+            statusText.textContent = 'Uploading files...';
+            progressLabel.textContent = 'Uploading';
+
+            startPolling();
+            startStatsPolling();
+
+            for (let i = 0; i < selectedFiles.length; i++) {
+                const file = selectedFiles[i];
+                const percent = Math.round((i / selectedFiles.length) * 100);
+                
+                progressFill.style.width = percent + '%';
+                progressValue.textContent = percent + '%';
+                statusText.textContent = `Uploading ${i + 1}/${selectedFiles.length}: ${file.name}`;
+
+                try {
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    
+                    await fetch('/upload_chunk', { method: 'POST', body: formData });
+                    await fetch('/enqueue_file', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ filename: file.name })
+                    });
+                } catch (error) {
+                    addLog(`Failed: ${file.name}`, 'error');
+                }
+            }
+
+            progressFill.style.width = '100%';
+            progressValue.textContent = '100%';
+            progressLabel.textContent = 'Processing';
+            statusText.textContent = 'All files uploaded. Processing in background...';
+        });
+
+        function startPolling() {
+            pollingInterval = setInterval(async () => {
+                try {
+                    const res = await fetch('/status');
+                    const status = await res.json();
+
+                    numWorkers = status.num_workers || 16;
+                    updateWorkersUI(status.active_workers || 0, numWorkers);
+                    updateQueueUI(status.queue_size || 0, status.current_filename);
+
+                    if (status.logs?.length > 0) {
+                        logContent.innerHTML = status.logs.slice(-50).map(log => 
+                            `<div class="log-entry">${escapeHtml(log)}</div>`
+                        ).join('');
+                        logContent.scrollTop = logContent.scrollHeight;
+                    }
+
+                    if (status.state === 'processing') {
+                        progressLabel.textContent = 'Processing';
+                        statusText.textContent = status.current_step || 'Processing...';
+                        if (status.current_filename) {
+                            statusText.textContent += ` - ${status.current_filename}`;
+                        }
+                    } else if (status.state === 'idle' && status.results?.length > 0) {
+                        displayResults(status.results);
+                        statusText.textContent = 'Ready for new files';
+                        resetForNewUpload();
+                    } else if (status.state === 'completed') {
+                        displayResults(status.results);
+                        statusText.textContent = 'All tracks processed';
+                        showToast('Processing complete');
+                        resetForNewUpload();
+                    } else if (status.state === 'error') {
+                        statusText.textContent = 'Error: ' + status.error;
+                        resetForNewUpload();
+                    }
+                } catch (e) {
+                    console.error('Polling error:', e);
+                }
+            }, 1000);
+        }
+
+        function startStatsPolling() {
+            const updateStats = async () => {
+                try {
+                    const res = await fetch('/system_stats');
+                    const stats = await res.json();
+
+                    document.getElementById('cpuValue').textContent = stats.cpu.percent + '%';
+                    document.getElementById('ramValue').textContent = stats.memory.used_percent + '%';
+
+                    if (stats.gpu.available) {
+                        document.getElementById('gpuChip').style.display = 'flex';
+                        document.getElementById('gpuValue').textContent = stats.gpu.name.split(' ').pop();
+                        document.getElementById('gpuMem').textContent = stats.gpu.memory_gb + 'GB';
+                        document.getElementById('gpuUsage').textContent = stats.gpu.memory_used_percent + '%';
+                        document.getElementById('gpuName').textContent = stats.gpu.name;
+                    }
+
+                    document.getElementById('memUsage').textContent = stats.memory.used_percent + '%';
+                    document.getElementById('memAvail').textContent = stats.memory.available_gb + ' GB available';
+                    document.getElementById('diskUsage').textContent = stats.disk.used_percent + '%';
+                    document.getElementById('diskFree').textContent = stats.disk.free_gb + ' GB free';
+
+                    // Estimate throughput
+                    if (startTime && processedCount > 0) {
+                        const elapsed = (Date.now() - startTime) / 60000;
+                        const rate = Math.round(processedCount / elapsed);
+                        document.getElementById('throughput').textContent = rate || '--';
+                    }
+                } catch (e) {}
+            };
+            
+            updateStats();
+            statsInterval = setInterval(updateStats, 2000);
+        }
+
+        function updateWorkersUI(active, total) {
+            document.getElementById('workersActive').textContent = `${active} / ${total}`;
+            workersGrid.innerHTML = '';
+            
+            for (let i = 0; i < total; i++) {
+                const cell = document.createElement('div');
+                cell.className = 'worker-cell' + (i < active ? ' busy' : '');
+                cell.textContent = i + 1;
+                workersGrid.appendChild(cell);
+            }
+        }
+
+        function updateQueueUI(count, currentFile) {
+            document.getElementById('queueCount').textContent = count;
+            const queueList = document.getElementById('queueList');
+            
+            if (count === 0 && !currentFile) {
+                queueList.innerHTML = '<div class="queue-empty">No tracks in queue</div>';
+            } else {
+                let html = '';
+                if (currentFile) {
+                    html += `
+                        <div class="queue-item">
+                            <div class="queue-item-status processing"></div>
+                            <span class="queue-item-name">${escapeHtml(currentFile)}</span>
+                            <span class="queue-item-badge">Processing</span>
+                        </div>
+                    `;
+                }
+                for (let i = 0; i < Math.min(count, 5); i++) {
+                    html += `
+                        <div class="queue-item">
+                            <div class="queue-item-status waiting"></div>
+                            <span class="queue-item-name">Waiting...</span>
+                            <span class="queue-item-badge">#${i + 1}</span>
+                        </div>
+                    `;
+                }
+                if (count > 5) {
+                    html += `<div class="queue-item"><span class="queue-item-name" style="text-align:center;width:100%;color:var(--text-muted)">+${count - 5} more in queue</span></div>`;
+                }
+                queueList.innerHTML = html;
+            }
+        }
+
+        function displayResults(results) {
+            processedCount = results.length;
+            resultsCount.textContent = `${results.length} tracks ready`;
+            resultsList.innerHTML = '';
+
+            results.forEach(track => {
+                const card = document.createElement('div');
+                card.className = 'track-card';
+                
+                let editsHtml = track.edits.map(edit => `
+                    <div class="edit-item">
+                        <span class="edit-name">${escapeHtml(edit.name)}</span>
+                        <div class="edit-actions">
+                            <a href="${edit.mp3}" class="dl-btn dl-btn-mp3" download>MP3</a>
+                            <a href="${edit.wav}" class="dl-btn dl-btn-wav" download>WAV</a>
+                        </div>
+                    </div>
+                `).join('');
+
+                card.innerHTML = `
+                    <div class="track-header">
+                        <div class="track-icon"><i data-lucide="disc-3"></i></div>
+                        <div class="track-info">
+                            <div class="track-name">${escapeHtml(track.original)}</div>
+                            <div class="track-meta">${track.edits.length} versions</div>
+                        </div>
+                    </div>
+                    <div class="track-edits">${editsHtml}</div>
+                `;
+                
+                resultsList.appendChild(card);
+            });
+
+            lucide.createIcons();
+            resultsSection.classList.add('active');
+        }
+
+        function resetForNewUpload() {
+            submitBtn.disabled = false;
+            selectedFiles = [];
+            updateFileList();
+            fileInput.value = '';
+            folderInput.value = '';
+        }
+
+        function addLog(message, type = '') {
+            const entry = document.createElement('div');
+            entry.className = 'log-entry' + (type ? ' ' + type : '');
+            entry.textContent = message;
+            logContent.appendChild(entry);
+            logContent.scrollTop = logContent.scrollHeight;
+        }
+
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            document.getElementById('toastMessage').textContent = message;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Initialize workers grid
+        updateWorkersUI(0, 16);
+
+        // Start stats polling on page load
+        startStatsPolling();
+    </script>
+</body>
+</html>

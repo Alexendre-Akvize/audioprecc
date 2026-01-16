@@ -1,0 +1,23 @@
+# Séparateur de Source Audio (MVP)
+
+Ce projet permet de séparer les voix (acapella) et l'instrumental d'un fichier MP3.
+
+## Installation
+
+1. Assurez-vous d'avoir Python 3.8+ et ffmpeg installés.
+2. Installez les dépendances :
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+## Utilisation
+
+1. Lancez l'application :
+   ```bash
+   python app.py
+   ```
+2. Ouvrez votre navigateur à l'adresse `http://localhost:5001`.
+3. Uploadez un fichier MP3 et attendez le traitement.
+4. Téléchargez les pistes séparées.
+
+Note : Le premier traitement sera plus long car le modèle de séparation (Demucs) sera téléchargé.
