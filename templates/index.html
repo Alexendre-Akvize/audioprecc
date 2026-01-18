@@ -1462,17 +1462,32 @@
                     const formData = new FormData();
                     formData.append('file', file);
                     
-                    await fetch('/upload_chunk', { method: 'POST', body: formData });
-                    await fetch('/enqueue_file', {
+                    // Upload the file
+                    const uploadResponse = await fetch('/upload_chunk', { method: 'POST', body: formData });
+                    if (!uploadResponse.ok) {
+                        throw new Error(`Upload failed: ${uploadResponse.status}`);
+                    }
+                    
+                    // Small delay to ensure file is fully written
+                    await new Promise(r => setTimeout(r, 100));
+                    
+                    // Enqueue for processing
+                    const enqueueResponse = await fetch('/enqueue_file', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ filename: file.name })
                     });
                     
+                    if (!enqueueResponse.ok) {
+                        const errorData = await enqueueResponse.json();
+                        throw new Error(errorData.error || `Enqueue failed: ${enqueueResponse.status}`);
+                    }
+                    
                     // Mark as waiting (queued) after successful upload
                     updateTrackStatus(file.name, 'waiting');
                 } catch (error) {
-                    addLog(`Failed: ${file.name}`, 'error');
+                    console.error(`Upload error for ${file.name}:`, error);
+                    addLog(`Failed: ${file.name} - ${error.message}`, 'error');
                     // Remove from track list on failure
                     removeTrackFromList(file.name);
                 }

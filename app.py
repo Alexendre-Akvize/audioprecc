@@ -39,155 +39,150 @@ from threading import Lock
 sessions_status = {}
 sessions_lock = Lock()
 
-# Track downloads for auto-cleanup with delayed deletion (10 hours)
-# Structure: { "Track Name": {"files_to_download": 6, "downloaded": 0, "original_path": "/path/to/original.mp3", "created_at": timestamp} }
+# Track downloads - files stay until track.idbyrivoli.com confirms successful download
+# Structure: { "Track Name": {"files_total": 6, "original_path": "/path/to/original.mp3", "created_at": timestamp, "files": {...}} }
 download_tracker = {}
 download_tracker_lock = Lock()
 
-# Scheduled cleanup list: tracks to delete after delay
-# Structure: { "Track Name": {"scheduled_at": timestamp, "delete_after": timestamp, "paths": {...}} }
-scheduled_cleanup = {}
-scheduled_cleanup_lock = Lock()
+# Pending downloads awaiting confirmation from track.idbyrivoli.com
+# Structure: { "Track Name": {"created_at": timestamp, "files": [], "processed_dir": "...", "original_path": "...", "htdemucs_dir": "..."} }
+pending_downloads = {}
+pending_downloads_lock = Lock()
 
-# Cleanup delay: 10 hours in seconds
-CLEANUP_DELAY_SECONDS = 10 * 60 * 60  # 10 hours
+# Maximum number of pending tracks before warning (configurable)
+MAX_PENDING_TRACKS = int(os.environ.get('MAX_PENDING_TRACKS', 20))
+PENDING_WARNING_THRESHOLD = int(os.environ.get('PENDING_WARNING_THRESHOLD', 10))
 
-def track_file_for_cleanup(track_name, original_path, num_files=6):
-    """Register a track for cleanup after all files are downloaded (with 10h delay)."""
-    with download_tracker_lock:
+def get_pending_tracks_count():
+    """Get the number of tracks pending download confirmation."""
+    with pending_downloads_lock:
+        return len(pending_downloads)
+
+def check_pending_tracks_warning():
+    """Check if there are too many pending tracks and return warning message if so."""
+    count = get_pending_tracks_count()
+    if count >= MAX_PENDING_TRACKS:
+        return {
+            'warning': True,
+            'level': 'critical',
+            'message': f'⚠️ CRITICAL: {count} tracks en attente de téléchargement (max: {MAX_PENDING_TRACKS}). Veuillez télécharger les tracks existants avant d\'en ajouter de nouveaux.',
+            'count': count,
+            'max': MAX_PENDING_TRACKS
+        }
+    elif count >= PENDING_WARNING_THRESHOLD:
+        return {
+            'warning': True,
+            'level': 'warning',
+            'message': f'⚠️ {count} tracks en attente de téléchargement. Pensez à télécharger les tracks existants.',
+            'count': count,
+            'threshold': PENDING_WARNING_THRESHOLD
+        }
+    return {'warning': False, 'count': count}
+
+def track_file_for_pending_download(track_name, original_path, num_files=6):
+    """Register a track as pending download - files will stay until track.idbyrivoli.com confirms download."""
+    with pending_downloads_lock:
         # Also track the htdemucs intermediate folder
         htdemucs_dir = os.path.join(OUTPUT_FOLDER, 'htdemucs', track_name)
-        download_tracker[track_name] = {
+        pending_downloads[track_name] = {
             'files_total': num_files,
-            'downloaded': 0,
-            'downloaded_files': set(),  # Track which specific files were downloaded
+            'files': [],  # Will be populated with file paths
             'original_path': original_path,
             'processed_dir': os.path.join(PROCESSED_FOLDER, track_name),
             'htdemucs_dir': htdemucs_dir,
             'created_at': time.time()
         }
+        
+        pending_count = len(pending_downloads)
         print(f"")
         print(f"📝 ════════════════════════════════════════════════")
-        print(f"📝 TRACKER: Registered '{track_name}'")
-        print(f"📝 Files to track: {num_files}")
+        print(f"📝 PENDING: Registered '{track_name}'")
+        print(f"📝 Files available: {num_files}")
         print(f"📝 Original: {original_path}")
         print(f"📝 Processed dir: {PROCESSED_FOLDER}/{track_name}")
-        print(f"📝 Retention: 10 hours after all downloads complete")
-        print(f"📝 All tracked tracks: {list(download_tracker.keys())}")
+        print(f"📝 Status: AWAITING download from track.idbyrivoli.com")
+        print(f"📝 Total pending tracks: {pending_count}")
+        if pending_count >= PENDING_WARNING_THRESHOLD:
+            print(f"📝 ⚠️ WARNING: {pending_count} tracks pending (threshold: {PENDING_WARNING_THRESHOLD})")
         print(f"📝 ════════════════════════════════════════════════")
 
-def schedule_track_cleanup(track_name, tracker_data):
-    """Schedule a track for delayed cleanup (10 hours from now)."""
-    with scheduled_cleanup_lock:
-        now = time.time()
-        delete_after = now + CLEANUP_DELAY_SECONDS
-        scheduled_cleanup[track_name] = {
-            'scheduled_at': now,
-            'delete_after': delete_after,
-            'processed_dir': tracker_data.get('processed_dir'),
-            'original_path': tracker_data.get('original_path'),
-            'htdemucs_dir': tracker_data.get('htdemucs_dir')
-        }
+def confirm_track_download(track_name):
+    """
+    Called when track.idbyrivoli.com confirms successful download.
+    Deletes all files associated with this track.
+    Returns True if track was found and deleted, False otherwise.
+    """
+    with pending_downloads_lock:
+        if track_name not in pending_downloads:
+            print(f"⚠️ Track '{track_name}' not found in pending downloads")
+            return False
         
-        delete_time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(delete_after))
+        track_info = pending_downloads[track_name]
         print(f"")
-        print(f"⏰ ════════════════════════════════════════════════")
-        print(f"⏰ SCHEDULED CLEANUP: '{track_name}'")
-        print(f"⏰ Will be deleted at: {delete_time_str} (in 10 hours)")
-        print(f"⏰ Pending cleanups: {len(scheduled_cleanup)}")
-        print(f"⏰ ════════════════════════════════════════════════")
+        print(f"✅ ════════════════════════════════════════════════")
+        print(f"✅ CONFIRMED DOWNLOAD: '{track_name}'")
+        print(f"✅ Cleaning up files...")
+        
+        # Delete processed folder
+        if track_info.get('processed_dir') and os.path.exists(track_info['processed_dir']):
+            try:
+                shutil.rmtree(track_info['processed_dir'])
+                print(f"   🗑️ Deleted processed folder: {track_info['processed_dir']}")
+            except Exception as e:
+                print(f"   ⚠️ Could not delete processed folder: {e}")
+        
+        # Delete original upload file
+        if track_info.get('original_path') and os.path.exists(track_info['original_path']):
+            try:
+                os.remove(track_info['original_path'])
+                print(f"   🗑️ Deleted original: {track_info['original_path']}")
+            except Exception as e:
+                print(f"   ⚠️ Could not delete original: {e}")
+        
+        # Delete htdemucs intermediate folder
+        if track_info.get('htdemucs_dir') and os.path.exists(track_info['htdemucs_dir']):
+            try:
+                shutil.rmtree(track_info['htdemucs_dir'])
+                print(f"   🗑️ Deleted htdemucs folder: {track_info['htdemucs_dir']}")
+            except Exception as e:
+                print(f"   ⚠️ Could not delete htdemucs folder: {e}")
+        
+        # Remove from pending downloads
+        del pending_downloads[track_name]
+        print(f"   ✅ Cleanup complete for '{track_name}'")
+        print(f"   📊 Remaining pending tracks: {len(pending_downloads)}")
+        print(f"✅ ════════════════════════════════════════════════")
+        
+        return True
 
-def run_scheduled_cleanups():
-    """Run any scheduled cleanups that are due. Called periodically."""
-    with scheduled_cleanup_lock:
+def get_pending_tracks_list():
+    """Get list of all pending tracks with their info."""
+    with pending_downloads_lock:
+        tracks = []
         now = time.time()
-        tracks_to_delete = []
-        
-        for track_name, cleanup_info in scheduled_cleanup.items():
-            if now >= cleanup_info['delete_after']:
-                tracks_to_delete.append(track_name)
-        
-        for track_name in tracks_to_delete:
-            cleanup_info = scheduled_cleanup[track_name]
-            print(f"🗑️ Running scheduled cleanup for: {track_name}")
-            
-            # Delete processed folder
-            if cleanup_info.get('processed_dir') and os.path.exists(cleanup_info['processed_dir']):
-                try:
-                    shutil.rmtree(cleanup_info['processed_dir'])
-                    print(f"   🗑️ Deleted processed folder: {cleanup_info['processed_dir']}")
-                except Exception as e:
-                    print(f"   ⚠️ Could not delete processed folder: {e}")
-            
-            # Delete original upload file
-            if cleanup_info.get('original_path') and os.path.exists(cleanup_info['original_path']):
-                try:
-                    os.remove(cleanup_info['original_path'])
-                    print(f"   🗑️ Deleted original: {cleanup_info['original_path']}")
-                except Exception as e:
-                    print(f"   ⚠️ Could not delete original: {e}")
-            
-            # Delete htdemucs intermediate folder
-            if cleanup_info.get('htdemucs_dir') and os.path.exists(cleanup_info['htdemucs_dir']):
-                try:
-                    shutil.rmtree(cleanup_info['htdemucs_dir'])
-                    print(f"   🗑️ Deleted htdemucs folder: {cleanup_info['htdemucs_dir']}")
-                except Exception as e:
-                    print(f"   ⚠️ Could not delete htdemucs folder: {e}")
-            
-            del scheduled_cleanup[track_name]
-            print(f"   ✅ Cleanup complete for {track_name}")
-        
-        if tracks_to_delete:
-            print(f"🧹 Cleaned up {len(tracks_to_delete)} track(s). Remaining scheduled: {len(scheduled_cleanup)}")
+        for track_name, info in pending_downloads.items():
+            age_hours = (now - info.get('created_at', now)) / 3600
+            tracks.append({
+                'track_name': track_name,
+                'files_total': info.get('files_total', 0),
+                'created_at': time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(info.get('created_at', now))),
+                'age_hours': round(age_hours, 2),
+                'processed_dir': info.get('processed_dir', ''),
+            })
+        # Sort by creation time (oldest first)
+        tracks.sort(key=lambda x: x['age_hours'], reverse=True)
+        return tracks
 
-def cleanup_scheduler_thread():
-    """Background thread that runs scheduled cleanups every 5 minutes."""
-    while True:
-        try:
-            run_scheduled_cleanups()
-        except Exception as e:
-            print(f"⚠️ Cleanup scheduler error: {e}")
-        time.sleep(300)  # Check every 5 minutes
+print("📥 Pending downloads system initialized (files stay until API confirms download)")
 
-# Start cleanup scheduler thread
-cleanup_thread = threading.Thread(target=cleanup_scheduler_thread, daemon=True)
-cleanup_thread.start()
-print("🧹 Cleanup scheduler started (checks every 5 minutes, 10h retention)")
-
-def mark_file_downloaded(track_name, filepath):
-    """Mark a file as downloaded. Schedule cleanup when ALL files are downloaded (with 10h delay)."""
-    with download_tracker_lock:
-        if track_name not in download_tracker:
-            print(f"⚠️ Track '{track_name}' not in tracker - skipping")
-            return
-        
-        tracker = download_tracker[track_name]
-        
-        # Track which files have been downloaded (don't count duplicates)
-        if 'downloaded_files' not in tracker:
-            tracker['downloaded_files'] = set()
-        
-        file_basename = os.path.basename(filepath)
-        if file_basename in tracker['downloaded_files']:
-            print(f"   ℹ️ File already marked as downloaded: {file_basename}")
-            return
-        
-        tracker['downloaded_files'].add(file_basename)
-        tracker['downloaded'] = len(tracker['downloaded_files'])
-        
-        print(f"📥 Downloaded {tracker['downloaded']}/{tracker['files_total']} for {track_name}: {file_basename}")
-        
-        # Schedule cleanup when ALL files have been downloaded (with 10h delay)
-        if tracker['downloaded'] >= tracker['files_total']:
-            print(f"🎉 All {tracker['files_total']} files downloaded for {track_name}!")
-            print(f"⏰ Scheduling cleanup in 10 hours...")
-            
-            # Schedule for delayed cleanup instead of immediate deletion
-            schedule_track_cleanup(track_name, tracker)
-            
-            # Remove from active tracker (but files remain for 10h)
-            del download_tracker[track_name]
+def log_file_download(track_name, filepath):
+    """
+    Log when a file is downloaded (for monitoring purposes).
+    Files are NOT deleted here - they stay until track.idbyrivoli.com confirms download.
+    """
+    file_basename = os.path.basename(filepath)
+    print(f"📥 File downloaded for '{track_name}': {file_basename}")
+    print(f"   ℹ️ File will remain available until download is confirmed via /confirm_download")
 
 def get_session_id():
     """Get or create a unique session ID for the current user."""
@@ -1194,10 +1189,10 @@ def create_edits(vocals_path, inst_path, original_path, base_output_path, base_f
     else:
         log_message(f"⚠️ Pas de fichier instrumental")
     
-    # Register track for auto-cleanup after downloads
+    # Register track as pending download - files stay until track.idbyrivoli.com confirms
     # Count actual files: each edit has MP3 + WAV = 2 files per edit
     num_files = len(edits) * 2
-    track_file_for_cleanup(metadata_base_name, original_path, num_files)
+    track_file_for_pending_download(metadata_base_name, original_path, num_files)
 
     return edits
 
@@ -1543,9 +1538,28 @@ def worker(worker_id):
             if not os.path.exists(filepath):
                 filepath = os.path.join(UPLOAD_FOLDER, filename)
             
-            # Check if file exists
-            if not os.path.exists(filepath):
-                log_message(f"⚠️ Fichier introuvable (ignoré) : {filename}", session_id)
+            # Check if file exists with retries (handles race condition with upload)
+            file_found = os.path.exists(filepath)
+            if not file_found:
+                # Retry up to 5 times with 1 second delay (file might still be uploading)
+                for retry in range(5):
+                    time.sleep(1)
+                    # Re-check both locations
+                    filepath = os.path.join(session_upload_folder, filename)
+                    if os.path.exists(filepath):
+                        file_found = True
+                        print(f"   ✅ File found after {retry + 1} retry(ies): {filename}")
+                        break
+                    filepath = os.path.join(UPLOAD_FOLDER, filename)
+                    if os.path.exists(filepath):
+                        file_found = True
+                        print(f"   ✅ File found in global folder after {retry + 1} retry(ies): {filename}")
+                        break
+                    print(f"   ⏳ Waiting for file ({retry + 1}/5): {filename}")
+            
+            if not file_found:
+                log_message(f"⚠️ Fichier introuvable après 5 tentatives (ignoré) : {filename}", session_id)
+                log_message(f"   Chemins vérifiés: {session_upload_folder}/{filename} et {UPLOAD_FOLDER}/{filename}", session_id)
                 remove_from_queue_tracker(filename)
                 track_queue.task_done()
                 if track_queue.empty():
@@ -1769,7 +1783,43 @@ def enqueue_file():
     filename = data.get('filename')
     session_id = get_session_id()
     
+    # Check pending downloads warning
+    pending_warning = check_pending_tracks_warning()
+    
+    # Block new uploads if we've reached the critical limit
+    if pending_warning.get('level') == 'critical':
+        log_message(f"⚠️ [{session_id}] Upload bloqué: trop de tracks en attente ({pending_warning['count']})", session_id)
+        return jsonify({
+            'error': 'Too many pending downloads',
+            'warning': pending_warning,
+            'message': pending_warning['message']
+        }), 429  # Too Many Requests
+    
     if filename:
+        # Verify file exists before queueing (with brief retry for race condition)
+        session_upload_folder = os.path.join(UPLOAD_FOLDER, session_id)
+        filepath = os.path.join(session_upload_folder, filename)
+        
+        # Check if file exists, retry a few times if not (upload might still be completing)
+        file_exists = os.path.exists(filepath)
+        if not file_exists:
+            # Also check global folder
+            filepath_global = os.path.join(UPLOAD_FOLDER, filename)
+            file_exists = os.path.exists(filepath_global)
+        
+        if not file_exists:
+            # Brief retry (max 3 seconds) for slow uploads
+            for retry in range(3):
+                time.sleep(1)
+                if os.path.exists(filepath) or os.path.exists(os.path.join(UPLOAD_FOLDER, filename)):
+                    file_exists = True
+                    print(f"   ✅ File confirmed after {retry + 1}s wait: {filename}")
+                    break
+        
+        if not file_exists:
+            log_message(f"⚠️ [{session_id}] Fichier non trouvé, impossible d'ajouter à la file : {filename}", session_id)
+            return jsonify({'error': 'File not found', 'filename': filename}), 404
+        
         # Add to queue tracker for UI display
         add_to_queue_tracker(filename, session_id)
         
@@ -1777,7 +1827,19 @@ def enqueue_file():
         track_queue.put({'filename': filename, 'session_id': session_id})
         q_size = track_queue.qsize()
         log_message(f"📥 [{session_id}] Ajouté à la file : {filename} (File d'attente: {q_size})", session_id)
-        return jsonify({'message': 'Queued', 'queue_size': q_size, 'session_id': session_id})
+        
+        # Include warning if there are many pending downloads
+        response = {
+            'message': 'Queued', 
+            'queue_size': q_size, 
+            'session_id': session_id,
+            'pending_downloads': get_pending_tracks_count()
+        }
+        if pending_warning.get('warning'):
+            response['pending_warning'] = pending_warning
+            log_message(f"⚠️ [{session_id}] Avertissement: {pending_warning['message']}", session_id)
+        
+        return jsonify(response)
     
     return jsonify({'error': 'No filename'}), 400
 
@@ -1863,6 +1925,10 @@ def status():
     current_status['num_workers'] = NUM_WORKERS
     current_status['active_workers'] = sum(1 for t in worker_threads if t.is_alive())
     current_status['queue_items'] = get_queue_items_list()
+    
+    # Add pending downloads info and warning
+    current_status['pending_downloads'] = get_pending_tracks_count()
+    current_status['pending_warning'] = check_pending_tracks_warning()
     
     # Return session-specific status
     return jsonify(current_status)
@@ -2026,19 +2092,102 @@ def download_file():
     response.headers['Access-Control-Allow-Origin'] = '*'
     response.headers['Access-Control-Expose-Headers'] = 'Content-Disposition'
     
-    # Smart deletion: only delete AFTER all files for this track are downloaded
-    # The file has already been read into memory, so deletion won't affect the response
+    # Log the download - file is NOT deleted here
+    # Files stay available until track.idbyrivoli.com confirms via /confirm_download
     if track_name:
-        print(f"   🔍 Checking cleanup for track: '{track_name}'")
-        print(f"   🔍 Tracker keys: {list(download_tracker.keys())}")
-        
-        # Only mark as downloaded if track is in tracker (meaning not yet fully downloaded)
-        if track_name in download_tracker:
-            mark_file_downloaded(track_name, filepath)
-        else:
-            print(f"   ℹ️ Track not in tracker - file stays (already cleaned or first download)")
+        log_file_download(track_name, filepath)
     
     return response
+
+@app.route('/confirm_download', methods=['POST'])
+def confirm_download():
+    """
+    Endpoint for track.idbyrivoli.com to confirm successful download of a track.
+    Once confirmed, all files for this track will be deleted.
+    
+    Expected payload:
+    {
+        "track_name": "Track Name",  // The track name (folder name in processed/)
+        "api_key": "your-api-key"    // Authentication
+    }
+    
+    Or via query params:
+    /confirm_download?track_name=Track%20Name&api_key=your-api-key
+    """
+    # Get track_name from JSON body or query params
+    if request.is_json:
+        data = request.get_json()
+        track_name = data.get('track_name')
+        provided_key = data.get('api_key')
+    else:
+        track_name = request.args.get('track_name')
+        provided_key = request.args.get('api_key')
+    
+    # Also check Authorization header
+    auth_header = request.headers.get('Authorization', '')
+    if auth_header.startswith('Bearer '):
+        provided_key = auth_header[7:]
+    
+    # Validate API key
+    if provided_key != API_KEY:
+        print(f"❌ Invalid API key for confirm_download: {track_name}")
+        return jsonify({'error': 'Invalid API key'}), 401
+    
+    if not track_name:
+        return jsonify({'error': 'track_name is required'}), 400
+    
+    # URL decode track name (in case it's encoded)
+    track_name = urllib.parse.unquote(track_name)
+    
+    print(f"")
+    print(f"🔔 ════════════════════════════════════════════════")
+    print(f"🔔 CONFIRM DOWNLOAD REQUEST: '{track_name}'")
+    print(f"🔔 From: {request.remote_addr}")
+    print(f"🔔 ════════════════════════════════════════════════")
+    
+    # Confirm and delete
+    if confirm_track_download(track_name):
+        log_message(f"✅ Track téléchargé et supprimé: {track_name}")
+        return jsonify({
+            'success': True,
+            'message': f"Track '{track_name}' confirmed and cleaned up",
+            'pending_count': get_pending_tracks_count()
+        })
+    else:
+        # Track not found - might already be deleted or never existed
+        return jsonify({
+            'success': False,
+            'error': f"Track '{track_name}' not found in pending downloads",
+            'pending_count': get_pending_tracks_count()
+        }), 404
+
+
+@app.route('/pending_downloads')
+def list_pending_downloads():
+    """
+    List all tracks pending download confirmation.
+    Useful for monitoring and debugging.
+    """
+    # Check for API key (optional - can be public for monitoring)
+    auth_header = request.headers.get('Authorization', '')
+    api_key_param = request.args.get('api_key', '')
+    
+    is_authenticated = (
+        auth_header == f'Bearer {API_KEY}' or 
+        api_key_param == API_KEY
+    )
+    
+    pending = get_pending_tracks_list()
+    warning = check_pending_tracks_warning()
+    
+    return jsonify({
+        'pending_count': len(pending),
+        'max_pending': MAX_PENDING_TRACKS,
+        'warning_threshold': PENDING_WARNING_THRESHOLD,
+        'warning': warning,
+        'tracks': pending if is_authenticated else [{'track_name': t['track_name'], 'age_hours': t['age_hours']} for t in pending]
+    })
+
 
 # Serve static files from processed folder directly
 @app.route('/processed/<path:filepath>')
@@ -2084,39 +2233,23 @@ def debug_url():
 
 @app.route('/debug_cleanup')
 def debug_cleanup():
-    """Debug route to check cleanup scheduler status and track retention."""
-    now = time.time()
-    
-    # Active tracks (not yet fully downloaded)
-    active_tracks = {}
-    with download_tracker_lock:
-        for track_name, info in download_tracker.items():
-            age_hours = (now - info.get('created_at', now)) / 3600
-            active_tracks[track_name] = {
-                'downloaded': info.get('downloaded', 0),
-                'total': info.get('files_total', 0),
-                'age_hours': round(age_hours, 2)
-            }
-    
-    # Scheduled for cleanup
-    scheduled_tracks = {}
-    with scheduled_cleanup_lock:
-        for track_name, info in scheduled_cleanup.items():
-            time_remaining = info['delete_after'] - now
-            hours_remaining = time_remaining / 3600
-            scheduled_tracks[track_name] = {
-                'delete_at': time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(info['delete_after'])),
-                'hours_remaining': round(max(0, hours_remaining), 2),
-                'minutes_remaining': round(max(0, time_remaining / 60), 1)
-            }
+    """Debug route to check pending downloads status."""
+    pending = get_pending_tracks_list()
+    warning = check_pending_tracks_warning()
     
     return jsonify({
-        'retention_hours': CLEANUP_DELAY_SECONDS / 3600,
-        'active_tracks': active_tracks,
-        'active_count': len(active_tracks),
-        'scheduled_for_cleanup': scheduled_tracks,
-        'scheduled_count': len(scheduled_tracks),
-        'current_time': time.strftime("%Y-%m-%d %H:%M:%S")
+        'mode': 'confirmation_based',
+        'description': 'Files stay until track.idbyrivoli.com confirms download via /confirm_download',
+        'pending_count': len(pending),
+        'max_pending': MAX_PENDING_TRACKS,
+        'warning_threshold': PENDING_WARNING_THRESHOLD,
+        'warning': warning,
+        'pending_tracks': pending,
+        'current_time': time.strftime("%Y-%m-%d %H:%M:%S"),
+        'endpoints': {
+            'confirm_download': 'POST /confirm_download with track_name and api_key',
+            'list_pending': 'GET /pending_downloads'
+        }
     })
 
 @app.route('/debug_gpu')
