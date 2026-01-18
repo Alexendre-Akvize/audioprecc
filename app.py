@@ -39,13 +39,21 @@ from threading import Lock
 sessions_status = {}
 sessions_lock = Lock()
 
-# Track downloads for auto-cleanup
-# Structure: { "Track Name": {"files_to_download": 6, "downloaded": 0, "original_path": "/path/to/original.mp3"} }
+# Track downloads for auto-cleanup with delayed deletion (10 hours)
+# Structure: { "Track Name": {"files_to_download": 6, "downloaded": 0, "original_path": "/path/to/original.mp3", "created_at": timestamp} }
 download_tracker = {}
 download_tracker_lock = Lock()
 
+# Scheduled cleanup list: tracks to delete after delay
+# Structure: { "Track Name": {"scheduled_at": timestamp, "delete_after": timestamp, "paths": {...}} }
+scheduled_cleanup = {}
+scheduled_cleanup_lock = Lock()
+
+# Cleanup delay: 10 hours in seconds
+CLEANUP_DELAY_SECONDS = 10 * 60 * 60  # 10 hours
+
 def track_file_for_cleanup(track_name, original_path, num_files=6):
-    """Register a track for cleanup after all files are downloaded."""
+    """Register a track for cleanup after all files are downloaded (with 10h delay)."""
     with download_tracker_lock:
         # Also track the htdemucs intermediate folder
         htdemucs_dir = os.path.join(OUTPUT_FOLDER, 'htdemucs', track_name)
@@ -55,7 +63,8 @@ def track_file_for_cleanup(track_name, original_path, num_files=6):
             'downloaded_files': set(),  # Track which specific files were downloaded
             'original_path': original_path,
             'processed_dir': os.path.join(PROCESSED_FOLDER, track_name),
-            'htdemucs_dir': htdemucs_dir
+            'htdemucs_dir': htdemucs_dir,
+            'created_at': time.time()
         }
         print(f"")
         print(f"📝 ════════════════════════════════════════════════")
@@ -63,14 +72,94 @@ def track_file_for_cleanup(track_name, original_path, num_files=6):
         print(f"📝 Files to track: {num_files}")
         print(f"📝 Original: {original_path}")
         print(f"📝 Processed dir: {PROCESSED_FOLDER}/{track_name}")
+        print(f"📝 Retention: 10 hours after all downloads complete")
         print(f"📝 All tracked tracks: {list(download_tracker.keys())}")
         print(f"📝 ════════════════════════════════════════════════")
 
+def schedule_track_cleanup(track_name, tracker_data):
+    """Schedule a track for delayed cleanup (10 hours from now)."""
+    with scheduled_cleanup_lock:
+        now = time.time()
+        delete_after = now + CLEANUP_DELAY_SECONDS
+        scheduled_cleanup[track_name] = {
+            'scheduled_at': now,
+            'delete_after': delete_after,
+            'processed_dir': tracker_data.get('processed_dir'),
+            'original_path': tracker_data.get('original_path'),
+            'htdemucs_dir': tracker_data.get('htdemucs_dir')
+        }
+        
+        delete_time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(delete_after))
+        print(f"")
+        print(f"⏰ ════════════════════════════════════════════════")
+        print(f"⏰ SCHEDULED CLEANUP: '{track_name}'")
+        print(f"⏰ Will be deleted at: {delete_time_str} (in 10 hours)")
+        print(f"⏰ Pending cleanups: {len(scheduled_cleanup)}")
+        print(f"⏰ ════════════════════════════════════════════════")
+
+def run_scheduled_cleanups():
+    """Run any scheduled cleanups that are due. Called periodically."""
+    with scheduled_cleanup_lock:
+        now = time.time()
+        tracks_to_delete = []
+        
+        for track_name, cleanup_info in scheduled_cleanup.items():
+            if now >= cleanup_info['delete_after']:
+                tracks_to_delete.append(track_name)
+        
+        for track_name in tracks_to_delete:
+            cleanup_info = scheduled_cleanup[track_name]
+            print(f"🗑️ Running scheduled cleanup for: {track_name}")
+            
+            # Delete processed folder
+            if cleanup_info.get('processed_dir') and os.path.exists(cleanup_info['processed_dir']):
+                try:
+                    shutil.rmtree(cleanup_info['processed_dir'])
+                    print(f"   🗑️ Deleted processed folder: {cleanup_info['processed_dir']}")
+                except Exception as e:
+                    print(f"   ⚠️ Could not delete processed folder: {e}")
+            
+            # Delete original upload file
+            if cleanup_info.get('original_path') and os.path.exists(cleanup_info['original_path']):
+                try:
+                    os.remove(cleanup_info['original_path'])
+                    print(f"   🗑️ Deleted original: {cleanup_info['original_path']}")
+                except Exception as e:
+                    print(f"   ⚠️ Could not delete original: {e}")
+            
+            # Delete htdemucs intermediate folder
+            if cleanup_info.get('htdemucs_dir') and os.path.exists(cleanup_info['htdemucs_dir']):
+                try:
+                    shutil.rmtree(cleanup_info['htdemucs_dir'])
+                    print(f"   🗑️ Deleted htdemucs folder: {cleanup_info['htdemucs_dir']}")
+                except Exception as e:
+                    print(f"   ⚠️ Could not delete htdemucs folder: {e}")
+            
+            del scheduled_cleanup[track_name]
+            print(f"   ✅ Cleanup complete for {track_name}")
+        
+        if tracks_to_delete:
+            print(f"🧹 Cleaned up {len(tracks_to_delete)} track(s). Remaining scheduled: {len(scheduled_cleanup)}")
+
+def cleanup_scheduler_thread():
+    """Background thread that runs scheduled cleanups every 5 minutes."""
+    while True:
+        try:
+            run_scheduled_cleanups()
+        except Exception as e:
+            print(f"⚠️ Cleanup scheduler error: {e}")
+        time.sleep(300)  # Check every 5 minutes
+
+# Start cleanup scheduler thread
+cleanup_thread = threading.Thread(target=cleanup_scheduler_thread, daemon=True)
+cleanup_thread.start()
+print("🧹 Cleanup scheduler started (checks every 5 minutes, 10h retention)")
+
 def mark_file_downloaded(track_name, filepath):
-    """Mark a file as downloaded. Delete ALL files only when ALL are downloaded."""
+    """Mark a file as downloaded. Schedule cleanup when ALL files are downloaded (with 10h delay)."""
     with download_tracker_lock:
         if track_name not in download_tracker:
-            print(f"⚠️ Track '{track_name}' not in tracker - skipping deletion")
+            print(f"⚠️ Track '{track_name}' not in tracker - skipping")
             return
         
         tracker = download_tracker[track_name]
@@ -89,37 +178,16 @@ def mark_file_downloaded(track_name, filepath):
         
         print(f"📥 Downloaded {tracker['downloaded']}/{tracker['files_total']} for {track_name}: {file_basename}")
         
-        # Only cleanup when ALL files have been downloaded
+        # Schedule cleanup when ALL files have been downloaded (with 10h delay)
         if tracker['downloaded'] >= tracker['files_total']:
-            print(f"🎉 All {tracker['files_total']} files downloaded for {track_name}! Starting cleanup...")
+            print(f"🎉 All {tracker['files_total']} files downloaded for {track_name}!")
+            print(f"⏰ Scheduling cleanup in 10 hours...")
             
-            # Delete all processed files
-            if tracker['processed_dir'] and os.path.exists(tracker['processed_dir']):
-                try:
-                    shutil.rmtree(tracker['processed_dir'])
-                    print(f"🗑️ Deleted processed folder: {tracker['processed_dir']}")
-                except Exception as e:
-                    print(f"⚠️ Could not delete processed folder: {e}")
+            # Schedule for delayed cleanup instead of immediate deletion
+            schedule_track_cleanup(track_name, tracker)
             
-            # Delete original upload file
-            if tracker['original_path'] and os.path.exists(tracker['original_path']):
-                try:
-                    os.remove(tracker['original_path'])
-                    print(f"🗑️ Deleted original: {tracker['original_path']}")
-                except Exception as e:
-                    print(f"⚠️ Could not delete original: {e}")
-            
-            # Delete htdemucs intermediate folder
-            if tracker.get('htdemucs_dir') and os.path.exists(tracker['htdemucs_dir']):
-                try:
-                    shutil.rmtree(tracker['htdemucs_dir'])
-                    print(f"🗑️ Deleted htdemucs folder: {tracker['htdemucs_dir']}")
-                except Exception as e:
-                    print(f"⚠️ Could not delete htdemucs folder: {e}")
-            
-            # Remove from tracker
+            # Remove from active tracker (but files remain for 10h)
             del download_tracker[track_name]
-            print(f"✅ Cleanup complete for {track_name}")
 
 def get_session_id():
     """Get or create a unique session ID for the current user."""
@@ -2012,6 +2080,43 @@ def debug_url():
         },
         'request_host': request.host,
         'request_url': request.url,
+    })
+
+@app.route('/debug_cleanup')
+def debug_cleanup():
+    """Debug route to check cleanup scheduler status and track retention."""
+    now = time.time()
+    
+    # Active tracks (not yet fully downloaded)
+    active_tracks = {}
+    with download_tracker_lock:
+        for track_name, info in download_tracker.items():
+            age_hours = (now - info.get('created_at', now)) / 3600
+            active_tracks[track_name] = {
+                'downloaded': info.get('downloaded', 0),
+                'total': info.get('files_total', 0),
+                'age_hours': round(age_hours, 2)
+            }
+    
+    # Scheduled for cleanup
+    scheduled_tracks = {}
+    with scheduled_cleanup_lock:
+        for track_name, info in scheduled_cleanup.items():
+            time_remaining = info['delete_after'] - now
+            hours_remaining = time_remaining / 3600
+            scheduled_tracks[track_name] = {
+                'delete_at': time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(info['delete_after'])),
+                'hours_remaining': round(max(0, hours_remaining), 2),
+                'minutes_remaining': round(max(0, time_remaining / 60), 1)
+            }
+    
+    return jsonify({
+        'retention_hours': CLEANUP_DELAY_SECONDS / 3600,
+        'active_tracks': active_tracks,
+        'active_count': len(active_tracks),
+        'scheduled_for_cleanup': scheduled_tracks,
+        'scheduled_count': len(scheduled_tracks),
+        'current_time': time.strftime("%Y-%m-%d %H:%M:%S")
     })
 
 @app.route('/debug_gpu')

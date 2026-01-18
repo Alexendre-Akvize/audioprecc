@@ -1,0 +1,27 @@
+[Unit]
+Description=ID By Rivoli Audio Processor
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/IDByRivoli-separate-audio
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+Environment="PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:1024,expandable_segments:True"
+Environment="NVIDIA_TF32_OVERRIDE=1"
+Environment="TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=1"
+Environment="OMP_NUM_THREADS=20"
+Environment="MKL_NUM_THREADS=20"
+
+ExecStart=/usr/local/bin/gunicorn --config gunicorn_config.py --bind 0.0.0.0:8888 --workers 1 --worker-class gthread --threads 16 --timeout 600 --access-logfile - --error-logfile - --capture-output app:app
+
+Restart=always
+RestartSec=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=idbyrivoli
+
+[Install]
+WantedBy=multi-user.target

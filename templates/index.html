@@ -521,6 +521,195 @@
             font-size: 13px;
         }
 
+        /* Track Status Summary */
+        .track-status-summary {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 12px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border-radius: 100px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        .status-badge svg {
+            width: 12px;
+            height: 12px;
+        }
+
+        .status-badge.uploading {
+            background: rgba(59, 130, 246, 0.15);
+            color: #3b82f6;
+        }
+
+        .status-badge.processing {
+            background: rgba(245, 158, 11, 0.15);
+            color: var(--warning);
+        }
+
+        .status-badge.waiting {
+            background: rgba(161, 161, 170, 0.15);
+            color: var(--text-muted);
+        }
+
+        .status-badge.completed {
+            background: rgba(34, 197, 94, 0.15);
+            color: var(--success);
+        }
+
+        /* Full Track List */
+        .full-track-list {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .track-list-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            background: var(--bg-primary);
+            border-radius: var(--radius-sm);
+            font-size: 12px;
+            transition: all 0.15s ease;
+        }
+
+        .track-list-item:hover {
+            background: var(--bg-tertiary);
+        }
+
+        .track-checkbox {
+            width: 18px;
+            height: 18px;
+            border-radius: 4px;
+            border: 2px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            transition: all 0.15s ease;
+        }
+
+        .track-checkbox svg {
+            width: 12px;
+            height: 12px;
+            opacity: 0;
+            transition: opacity 0.15s ease;
+        }
+
+        .track-checkbox.checked {
+            background: var(--success);
+            border-color: var(--success);
+        }
+
+        .track-checkbox.checked svg {
+            color: white;
+            opacity: 1;
+        }
+
+        .track-checkbox.uploading {
+            border-color: #3b82f6;
+        }
+
+        .track-checkbox.uploading svg {
+            color: #3b82f6;
+            opacity: 1;
+            animation: spin 1s linear infinite;
+        }
+
+        .track-checkbox.processing {
+            border-color: var(--warning);
+        }
+
+        .track-checkbox.processing svg {
+            color: var(--warning);
+            opacity: 1;
+            animation: spin 1s linear infinite;
+        }
+
+        .track-checkbox.waiting {
+            border-color: var(--text-muted);
+        }
+
+        .track-list-item-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: var(--text-secondary);
+        }
+
+        .track-list-item-status {
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 100px;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            font-weight: 500;
+            flex-shrink: 0;
+        }
+
+        .track-list-item-status.uploading {
+            background: rgba(59, 130, 246, 0.15);
+            color: #3b82f6;
+        }
+
+        .track-list-item-status.processing {
+            background: rgba(245, 158, 11, 0.15);
+            color: var(--warning);
+        }
+
+        .track-list-item-status.waiting {
+            background: rgba(161, 161, 170, 0.15);
+            color: var(--text-muted);
+        }
+
+        .track-list-item-status.completed {
+            background: rgba(34, 197, 94, 0.15);
+            color: var(--success);
+        }
+
+        .track-list-item-progress {
+            width: 60px;
+            height: 3px;
+            background: var(--bg-tertiary);
+            border-radius: 2px;
+            overflow: hidden;
+            flex-shrink: 0;
+        }
+
+        .track-list-item-progress-fill {
+            height: 100%;
+            background: var(--accent);
+            transition: width 0.3s ease;
+        }
+
+        .track-list-section-header {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            padding: 12px 12px 6px 12px;
+            margin-top: 8px;
+        }
+
+        .track-list-section-header:first-child {
+            margin-top: 0;
+        }
+
         /* Workers Card */
         .workers-grid {
             display: grid;
@@ -968,20 +1157,41 @@
         </div>
     </div>
 
-                <!-- Queue -->
+                <!-- Full Track List -->
                 <div class="card">
                     <div class="card-header">
                         <div class="queue-header">
                             <div class="card-title">
-                                <i data-lucide="list-ordered"></i>
-                                Queue
+                                <i data-lucide="list-checks"></i>
+                                All Tracks
                             </div>
-                            <span class="queue-count" id="queueCount">0</span>
+                            <span class="queue-count" id="totalTrackCount">0</span>
                         </div>
                     </div>
                     <div class="card-body" style="padding: 12px;">
-                        <div class="queue-list" id="queueList">
-                            <div class="queue-empty">No tracks in queue</div>
+                        <!-- Status summary -->
+                        <div class="track-status-summary" id="trackStatusSummary">
+                            <div class="status-badge uploading" id="uploadingBadge" style="display: none;">
+                                <i data-lucide="upload"></i>
+                                <span id="uploadingCount">0</span> uploading
+                            </div>
+                            <div class="status-badge processing" id="processingBadge" style="display: none;">
+                                <i data-lucide="loader-2" class="spin"></i>
+                                <span id="processingCount">0</span> processing
+                            </div>
+                            <div class="status-badge waiting" id="waitingBadge" style="display: none;">
+                                <i data-lucide="clock"></i>
+                                <span id="waitingCount">0</span> waiting
+                            </div>
+                            <div class="status-badge completed" id="completedBadge" style="display: none;">
+                                <i data-lucide="check-circle-2"></i>
+                                <span id="completedCount">0</span> done
+                            </div>
+                        </div>
+                        
+                        <!-- Full track list -->
+                        <div class="full-track-list" id="fullTrackList">
+                            <div class="queue-empty">No tracks yet</div>
                         </div>
                     </div>
                 </div>
@@ -1053,6 +1263,10 @@
         let startTime = null;
         let isUploading = false;
         let lastResultsCount = 0;
+        
+        // Full track tracking system
+        // Status: 'selected' | 'uploading' | 'waiting' | 'processing' | 'completed'
+        let allTracks = {}; // { filename: { status: string, progress: number, worker: number|null } }
 
         // DOM Elements
         const dropZone = document.getElementById('dropZone');
@@ -1081,17 +1295,30 @@
 
         function handleNewFiles(files) {
             const mp3s = files.filter(f => f.name.toLowerCase().endsWith('.mp3'));
+            const newFiles = [];
             mp3s.forEach(file => {
                 if (!selectedFiles.some(f => f.name === file.name && f.size === file.size)) {
                     selectedFiles.push(file);
+                    newFiles.push(file);
                 }
             });
+            // Add to full track list as 'selected'
+            if (newFiles.length > 0) {
+                addTracksToList(newFiles, 'selected');
+            }
             updateFileList();
         }
 
         function clearFiles() {
+            // Remove only selected/not-yet-uploaded files from track list
+            selectedFiles.forEach(file => {
+                if (allTracks[file.name]?.status === 'selected') {
+                    delete allTracks[file.name];
+                }
+            });
             selectedFiles = [];
             updateFileList();
+            updateFullTrackListUI();
             fileInput.value = '';
             folderInput.value = '';
         }
@@ -1228,6 +1455,9 @@
                 progressValue.textContent = percent + '%';
                 statusText.textContent = `Uploading ${i + 1}/${totalFiles}: ${file.name}`;
                 
+                // Mark as uploading in the track list
+                updateTrackStatus(file.name, 'uploading');
+                
                 try {
                     const formData = new FormData();
                     formData.append('file', file);
@@ -1238,8 +1468,13 @@
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ filename: file.name })
                     });
+                    
+                    // Mark as waiting (queued) after successful upload
+                    updateTrackStatus(file.name, 'waiting');
                 } catch (error) {
                     addLog(`Failed: ${file.name}`, 'error');
+                    // Remove from track list on failure
+                    removeTrackFromList(file.name);
                 }
             }
 
@@ -1267,7 +1502,6 @@
 
                     numWorkers = status.num_workers || 16;
                     updateWorkersUI(status.active_workers || 0, numWorkers);
-                    updateQueueUI(status.queue_items || []);
 
                     // Update logs
                     if (status.logs?.length > 0) {
@@ -1276,6 +1510,12 @@
                         ).join('');
                         logContent.scrollTop = logContent.scrollHeight;
                     }
+
+                    // Get list of completed track names from results
+                    const completedTracks = (status.results || []).map(r => r.original);
+                    
+                    // Sync full track list with server queue items
+                    syncTracksFromQueueItems(status.queue_items || [], completedTracks);
 
                     // Always update results if there are new ones
                     if (status.results?.length > 0 && status.results.length !== lastResultsCount) {
@@ -1407,6 +1647,59 @@
             queueList.innerHTML = html;
         }
 
+        // Download with retry logic
+        async function downloadWithRetry(url, filename, maxRetries = 3) {
+            let lastError = null;
+            
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    showToast(`Downloading ${filename}...`);
+                    
+                    const response = await fetch(url);
+                    
+                    if (!response.ok) {
+                        if (response.status === 404) {
+                            throw new Error('File not found (404) - may have expired');
+                        }
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    
+                    const blob = await response.blob();
+                    const downloadUrl = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = downloadUrl;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(downloadUrl);
+                    document.body.removeChild(a);
+                    
+                    showToast(`Downloaded: ${filename}`);
+                    return true;
+                    
+                } catch (error) {
+                    lastError = error;
+                    console.error(`Download attempt ${attempt}/${maxRetries} failed:`, error);
+                    
+                    if (attempt < maxRetries) {
+                        showToast(`Retry ${attempt}/${maxRetries} for ${filename}...`);
+                        // Wait before retry (exponential backoff: 1s, 2s, 4s)
+                        await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt - 1)));
+                    }
+                }
+            }
+            
+            // All retries failed
+            showToast(`Download failed: ${filename} - ${lastError?.message || 'Unknown error'}`);
+            console.error(`All ${maxRetries} download attempts failed for ${filename}:`, lastError);
+            return false;
+        }
+
+        function handleDownload(event, url, filename) {
+            event.preventDefault();
+            downloadWithRetry(url, filename);
+        }
+
         function displayResults(results) {
             processedCount = results.length;
             resultsCount.textContent = `${results.length} tracks ready`;
@@ -1416,15 +1709,19 @@
                 const card = document.createElement('div');
                 card.className = 'track-card';
                 
-                let editsHtml = track.edits.map(edit => `
+                let editsHtml = track.edits.map(edit => {
+                    const mp3Filename = edit.name + '.mp3';
+                    const wavFilename = edit.name + '.wav';
+                    return `
                         <div class="edit-item">
-                        <span class="edit-name">${escapeHtml(edit.name)}</span>
-                        <div class="edit-actions">
-                            <a href="${edit.mp3}" class="dl-btn dl-btn-mp3" download>MP3</a>
-                            <a href="${edit.wav}" class="dl-btn dl-btn-wav" download>WAV</a>
+                            <span class="edit-name">${escapeHtml(edit.name)}</span>
+                            <div class="edit-actions">
+                                <a href="${edit.mp3}" class="dl-btn dl-btn-mp3" onclick="handleDownload(event, '${edit.mp3}', '${escapeHtml(mp3Filename)}')">MP3</a>
+                                <a href="${edit.wav}" class="dl-btn dl-btn-wav" onclick="handleDownload(event, '${edit.wav}', '${escapeHtml(wavFilename)}')">WAV</a>
                             </div>
                         </div>
-                `).join('');
+                    `;
+                }).join('');
 
                 card.innerHTML = `
                     <div class="track-header">
@@ -1479,6 +1776,11 @@
                 processedCount = 0;
                 startTime = null;
                 logContent.innerHTML = '';
+                
+                // Clear the full track list
+                allTracks = {};
+                updateFullTrackListUI();
+                
                 showToast('Results cleared');
             } catch (e) {
                 console.error('Clear error:', e);
@@ -1491,8 +1793,226 @@
             return div.innerHTML;
         }
 
+        // Track list management functions
+        function addTracksToList(files, status = 'selected') {
+            files.forEach(file => {
+                const name = typeof file === 'string' ? file : file.name;
+                if (!allTracks[name]) {
+                    allTracks[name] = { status, progress: 0, worker: null };
+                }
+            });
+            updateFullTrackListUI();
+        }
+
+        function updateTrackStatus(filename, status, progress = null, worker = null) {
+            if (allTracks[filename]) {
+                allTracks[filename].status = status;
+                if (progress !== null) allTracks[filename].progress = progress;
+                if (worker !== null) allTracks[filename].worker = worker;
+            }
+            updateFullTrackListUI();
+        }
+
+        function removeTrackFromList(filename) {
+            delete allTracks[filename];
+            updateFullTrackListUI();
+        }
+
+        function updateFullTrackListUI() {
+            const container = document.getElementById('fullTrackList');
+            const entries = Object.entries(allTracks);
+            
+            // Update total count
+            document.getElementById('totalTrackCount').textContent = entries.length;
+            
+            // Calculate status counts
+            const counts = { selected: 0, uploading: 0, waiting: 0, processing: 0, completed: 0 };
+            entries.forEach(([_, info]) => {
+                if (counts[info.status] !== undefined) counts[info.status]++;
+            });
+            
+            // Update status badges
+            const uploadingBadge = document.getElementById('uploadingBadge');
+            const processingBadge = document.getElementById('processingBadge');
+            const waitingBadge = document.getElementById('waitingBadge');
+            const completedBadge = document.getElementById('completedBadge');
+            
+            const uploadingTotal = counts.selected + counts.uploading;
+            uploadingBadge.style.display = uploadingTotal > 0 ? 'inline-flex' : 'none';
+            document.getElementById('uploadingCount').textContent = uploadingTotal;
+            
+            processingBadge.style.display = counts.processing > 0 ? 'inline-flex' : 'none';
+            document.getElementById('processingCount').textContent = counts.processing;
+            
+            waitingBadge.style.display = counts.waiting > 0 ? 'inline-flex' : 'none';
+            document.getElementById('waitingCount').textContent = counts.waiting;
+            
+            completedBadge.style.display = counts.completed > 0 ? 'inline-flex' : 'none';
+            document.getElementById('completedCount').textContent = counts.completed;
+            
+            // Empty state
+            if (entries.length === 0) {
+                container.innerHTML = '<div class="queue-empty">No tracks yet</div>';
+                return;
+            }
+            
+            // Group by status
+            const groups = {
+                processing: [],
+                uploading: [],
+                selected: [],
+                waiting: [],
+                completed: []
+            };
+            
+            entries.forEach(([filename, info]) => {
+                if (groups[info.status]) {
+                    groups[info.status].push({ filename, ...info });
+                }
+            });
+            
+            let html = '';
+            
+            // Processing tracks first
+            if (groups.processing.length > 0) {
+                html += '<div class="track-list-section-header">Processing</div>';
+                groups.processing.forEach(track => {
+                    html += renderTrackItem(track);
+                });
+            }
+            
+            // Uploading tracks
+            if (groups.uploading.length > 0 || groups.selected.length > 0) {
+                html += '<div class="track-list-section-header">Uploading</div>';
+                [...groups.uploading, ...groups.selected].forEach(track => {
+                    html += renderTrackItem({ ...track, status: 'uploading' });
+                });
+            }
+            
+            // Waiting tracks
+            if (groups.waiting.length > 0) {
+                html += '<div class="track-list-section-header">Waiting in Queue</div>';
+                groups.waiting.forEach((track, index) => {
+                    html += renderTrackItem(track, index + 1);
+                });
+            }
+            
+            // Completed tracks
+            if (groups.completed.length > 0) {
+                html += '<div class="track-list-section-header">Completed</div>';
+                groups.completed.forEach(track => {
+                    html += renderTrackItem(track);
+                });
+            }
+            
+            container.innerHTML = html;
+            lucide.createIcons();
+        }
+
+        function renderTrackItem(track, queuePosition = null) {
+            const { filename, status, progress, worker } = track;
+            
+            let checkboxClass = status;
+            let checkboxIcon = '';
+            let statusLabel = '';
+            let showProgress = false;
+            
+            switch (status) {
+                case 'selected':
+                case 'uploading':
+                    checkboxIcon = '<i data-lucide="upload"></i>';
+                    checkboxClass = 'uploading';
+                    statusLabel = 'Uploading';
+                    break;
+                case 'waiting':
+                    checkboxIcon = '<i data-lucide="clock"></i>';
+                    statusLabel = queuePosition ? `#${queuePosition}` : 'Waiting';
+                    break;
+                case 'processing':
+                    checkboxIcon = '<i data-lucide="loader-2"></i>';
+                    statusLabel = worker ? `W${worker}` : 'Processing';
+                    showProgress = true;
+                    break;
+                case 'completed':
+                    checkboxIcon = '<i data-lucide="check"></i>';
+                    checkboxClass = 'checked';
+                    statusLabel = 'Done';
+                    break;
+            }
+            
+            return `
+                <div class="track-list-item">
+                    <div class="track-checkbox ${checkboxClass}">${checkboxIcon}</div>
+                    <span class="track-list-item-name">${escapeHtml(filename)}</span>
+                    ${showProgress ? `
+                        <div class="track-list-item-progress">
+                            <div class="track-list-item-progress-fill" style="width: ${progress}%"></div>
+                        </div>
+                    ` : ''}
+                    <span class="track-list-item-status ${status}">${statusLabel}</span>
+                </div>
+            `;
+        }
+
+        function syncTracksFromQueueItems(queueItems, completedTracks) {
+            // Update tracks from queue items (server-side queue)
+            const queueFilenames = new Set();
+            
+            queueItems.forEach(item => {
+                queueFilenames.add(item.filename);
+                const status = item.status === 'processing' ? 'processing' : 'waiting';
+                
+                if (!allTracks[item.filename]) {
+                    allTracks[item.filename] = { status, progress: item.progress || 0, worker: item.worker };
+                } else {
+                    allTracks[item.filename].status = status;
+                    allTracks[item.filename].progress = item.progress || 0;
+                    allTracks[item.filename].worker = item.worker;
+                }
+            });
+            
+            // Mark completed tracks
+            completedTracks.forEach(trackName => {
+                // Find matching track (may have different key)
+                const matchingKey = Object.keys(allTracks).find(key => 
+                    key === trackName || 
+                    key.replace(/\.mp3$/i, '') === trackName ||
+                    trackName.includes(key.replace(/\.mp3$/i, ''))
+                );
+                
+                if (matchingKey) {
+                    allTracks[matchingKey].status = 'completed';
+                    allTracks[matchingKey].progress = 100;
+                }
+            });
+            
+            // Remove tracks that are no longer in queue and not completed/uploading
+            Object.keys(allTracks).forEach(filename => {
+                const track = allTracks[filename];
+                if (!queueFilenames.has(filename) && 
+                    track.status !== 'completed' && 
+                    track.status !== 'uploading' &&
+                    track.status !== 'selected') {
+                    // Track finished or was removed - check if completed
+                    const isCompleted = completedTracks.some(name => 
+                        filename === name || 
+                        filename.replace(/\.mp3$/i, '') === name ||
+                        name.includes(filename.replace(/\.mp3$/i, ''))
+                    );
+                    if (isCompleted) {
+                        allTracks[filename].status = 'completed';
+                    }
+                }
+            });
+            
+            updateFullTrackListUI();
+        }
+
         // Initialize workers grid
         updateWorkersUI(0, 16);
+        
+        // Initialize full track list
+        updateFullTrackListUI();
 
         // Start polling on page load for multi-user visibility
         startPolling();
