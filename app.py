@@ -1849,24 +1849,50 @@ def upload_chunk():
     Receives a single file upload and saves it to session-specific folder.
     Supports multiple users uploading simultaneously.
     """
-    session_id = get_session_id()
-    
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file part'}), 400
+    try:
+        session_id = get_session_id()
         
-    file = request.files['file']
-    
-    if file.filename == '':
-        return jsonify({'error': 'No selected file'}), 400
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file part'}), 400
+            
+        file = request.files['file']
         
-    if file:
-        filename = file.filename
-        # Use session-specific upload folder
-        session_upload_folder = os.path.join(app.config['UPLOAD_FOLDER'], session_id)
-        os.makedirs(session_upload_folder, exist_ok=True)
-        filepath = os.path.join(session_upload_folder, filename)
-        file.save(filepath)
-        return jsonify({'message': f'File {filename} uploaded successfully', 'session_id': session_id})
+        if file.filename == '':
+            return jsonify({'error': 'No selected file'}), 400
+            
+        if file:
+            # Keep original filename but ensure it's safe for filesystem
+            filename = file.filename
+            # Replace problematic characters that might cause issues on some filesystems
+            # but keep most unicode characters intact
+            safe_filename = filename.replace('/', '_').replace('\\', '_').replace('\0', '')
+            
+            # Use session-specific upload folder
+            session_upload_folder = os.path.join(app.config['UPLOAD_FOLDER'], session_id)
+            os.makedirs(session_upload_folder, exist_ok=True)
+            filepath = os.path.join(session_upload_folder, safe_filename)
+            
+            # Save file with explicit error handling
+            try:
+                file.save(filepath)
+                print(f"✅ Upload OK: {safe_filename} → {filepath}")
+            except Exception as save_error:
+                print(f"❌ Save error for {safe_filename}: {save_error}")
+                return jsonify({'error': f'Failed to save file: {str(save_error)}'}), 500
+            
+            return jsonify({
+                'message': f'File {safe_filename} uploaded successfully', 
+                'session_id': session_id,
+                'filename': safe_filename
+            })
+        
+        return jsonify({'error': 'No file provided'}), 400
+        
+    except Exception as e:
+        print(f"❌ Upload endpoint error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Upload error: {str(e)}'}), 500
 
 @app.route('/start_processing', methods=['POST'])
 def start_processing():
