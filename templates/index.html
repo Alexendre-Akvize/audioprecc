@@ -1410,6 +1410,58 @@
             handleNewFiles(files);
         });
 
+        // Upload file with progress tracking using XMLHttpRequest
+        function uploadFileWithProgress(file, fileIndex, totalFiles) {
+            return new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                // Track upload progress
+                xhr.upload.addEventListener('progress', (event) => {
+                    if (event.lengthComputable) {
+                        const filePercent = Math.round((event.loaded / event.total) * 100);
+                        
+                        // Calculate overall progress: completed files + current file progress
+                        const completedFilesPercent = (fileIndex / totalFiles) * 100;
+                        const currentFileContribution = (filePercent / totalFiles);
+                        const overallPercent = Math.round(completedFilesPercent + currentFileContribution);
+                        
+                        // Update main progress bar
+                        progressFill.style.width = overallPercent + '%';
+                        progressValue.textContent = overallPercent + '%';
+                        
+                        // Update status text with file-specific progress
+                        const fileSizeMB = (file.size / (1024 * 1024)).toFixed(1);
+                        const uploadedMB = (event.loaded / (1024 * 1024)).toFixed(1);
+                        statusText.textContent = `Uploading ${fileIndex + 1}/${totalFiles}: ${file.name} (${uploadedMB}/${fileSizeMB} MB - ${filePercent}%)`;
+                        
+                        // Update track list item progress
+                        updateTrackStatus(file.name, 'uploading', filePercent);
+                    }
+                });
+                
+                xhr.addEventListener('load', () => {
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        resolve(xhr.response);
+                    } else {
+                        reject(new Error(`Upload failed: ${xhr.status}`));
+                    }
+                });
+                
+                xhr.addEventListener('error', () => {
+                    reject(new Error('Network error during upload'));
+                });
+                
+                xhr.addEventListener('abort', () => {
+                    reject(new Error('Upload aborted'));
+                });
+                
+                xhr.open('POST', '/upload_chunk');
+                xhr.send(formData);
+            });
+        }
+
         // Form submit - allows continuous uploads
         document.getElementById('uploadForm').addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -1449,24 +1501,13 @@
 
             for (let i = 0; i < totalFiles; i++) {
                 const file = filesToUpload[i];
-                const percent = Math.round((i / totalFiles) * 100);
-                
-                progressFill.style.width = percent + '%';
-                progressValue.textContent = percent + '%';
-                statusText.textContent = `Uploading ${i + 1}/${totalFiles}: ${file.name}`;
                 
                 // Mark as uploading in the track list
-                updateTrackStatus(file.name, 'uploading');
+                updateTrackStatus(file.name, 'uploading', 0);
                 
                 try {
-                    const formData = new FormData();
-                    formData.append('file', file);
-                    
-                    // Upload the file
-                    const uploadResponse = await fetch('/upload_chunk', { method: 'POST', body: formData });
-                    if (!uploadResponse.ok) {
-                        throw new Error(`Upload failed: ${uploadResponse.status}`);
-                    }
+                    // Upload with progress tracking
+                    await uploadFileWithProgress(file, i, totalFiles);
                     
                     // Small delay to ensure file is fully written
                     await new Promise(r => setTimeout(r, 100));
@@ -1937,7 +1978,8 @@
                 case 'uploading':
                     checkboxIcon = '<i data-lucide="upload"></i>';
                     checkboxClass = 'uploading';
-                    statusLabel = 'Uploading';
+                    statusLabel = progress > 0 ? `${progress}%` : 'Uploading';
+                    showProgress = true;  // Show progress bar for uploads too
                     break;
                 case 'waiting':
                     checkboxIcon = '<i data-lucide="clock"></i>';
@@ -1955,13 +1997,16 @@
                     break;
             }
             
+            // Different progress bar color for upload (blue) vs processing (white)
+            const progressColor = status === 'uploading' ? '#3b82f6' : 'var(--accent)';
+            
             return `
                 <div class="track-list-item">
                     <div class="track-checkbox ${checkboxClass}">${checkboxIcon}</div>
                     <span class="track-list-item-name">${escapeHtml(filename)}</span>
                     ${showProgress ? `
                         <div class="track-list-item-progress">
-                            <div class="track-list-item-progress-fill" style="width: ${progress}%"></div>
+                            <div class="track-list-item-progress-fill" style="width: ${progress}%; background: ${progressColor}"></div>
                         </div>
                     ` : ''}
                     <span class="track-list-item-status ${status}">${statusLabel}</span>
