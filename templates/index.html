@@ -1434,7 +1434,9 @@
                         // Update status text with file-specific progress
                         const fileSizeMB = (file.size / (1024 * 1024)).toFixed(1);
                         const uploadedMB = (event.loaded / (1024 * 1024)).toFixed(1);
-                        statusText.textContent = `Uploading ${fileIndex + 1}/${totalFiles}: ${file.name} (${uploadedMB}/${fileSizeMB} MB - ${filePercent}%)`;
+                        // Show just the filename (not the path for folder uploads)
+                        const displayName = file.name.split('/').pop().split('\\').pop();
+                        statusText.textContent = `Uploading ${fileIndex + 1}/${totalFiles}: ${displayName} (${uploadedMB}/${fileSizeMB} MB - ${filePercent}%)`;
                         
                         // Update track list item progress
                         updateTrackStatus(file.name, 'uploading', filePercent);
@@ -1443,9 +1445,21 @@
                 
                 xhr.addEventListener('load', () => {
                     if (xhr.status >= 200 && xhr.status < 300) {
-                        resolve(xhr.response);
+                        try {
+                            // Parse JSON response to get server's sanitized filename
+                            const response = JSON.parse(xhr.responseText);
+                            resolve(response);
+                        } catch (e) {
+                            // If not JSON, just resolve with the raw response
+                            resolve({ filename: file.name });
+                        }
                     } else {
-                        reject(new Error(`Upload failed: ${xhr.status}`));
+                        try {
+                            const errorResponse = JSON.parse(xhr.responseText);
+                            reject(new Error(errorResponse.error || `Upload failed: ${xhr.status}`));
+                        } catch (e) {
+                            reject(new Error(`Upload failed: ${xhr.status}`));
+                        }
                     }
                 });
                 
@@ -1506,17 +1520,18 @@
                 updateTrackStatus(file.name, 'uploading', 0);
                 
                 try {
-                    // Upload with progress tracking
-                    await uploadFileWithProgress(file, i, totalFiles);
+                    // Upload with progress tracking - returns the server's sanitized filename
+                    const uploadResult = await uploadFileWithProgress(file, i, totalFiles);
+                    const serverFilename = uploadResult.filename || file.name;
                     
                     // Small delay to ensure file is fully written
                     await new Promise(r => setTimeout(r, 100));
                     
-                    // Enqueue for processing
+                    // Enqueue for processing using the server's filename
                     const enqueueResponse = await fetch('/enqueue_file', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ filename: file.name })
+                        body: JSON.stringify({ filename: serverFilename })
                     });
                     
                     if (!enqueueResponse.ok) {
@@ -1524,8 +1539,15 @@
                         throw new Error(errorData.error || `Enqueue failed: ${enqueueResponse.status}`);
                     }
                     
-                    // Mark as waiting (queued) after successful upload
-                    updateTrackStatus(file.name, 'waiting');
+                    // Update track list with server filename and mark as waiting
+                    if (serverFilename !== file.name) {
+                        // Rename in our tracking if server changed the filename
+                        delete allTracks[file.name];
+                        allTracks[serverFilename] = { status: 'waiting', progress: 0, worker: null };
+                    } else {
+                        updateTrackStatus(file.name, 'waiting');
+                    }
+                    updateFullTrackListUI();
                 } catch (error) {
                     console.error(`Upload error for ${file.name}:`, error);
                     addLog(`Failed: ${file.name} - ${error.message}`, 'error');

@@ -1848,6 +1848,7 @@ def upload_chunk():
     """
     Receives a single file upload and saves it to session-specific folder.
     Supports multiple users uploading simultaneously.
+    Handles folder uploads where filename may contain path (e.g., "Folder/file.mp3").
     """
     try:
         session_id = get_session_id()
@@ -1861,11 +1862,22 @@ def upload_chunk():
             return jsonify({'error': 'No selected file'}), 400
             
         if file:
-            # Keep original filename but ensure it's safe for filesystem
-            filename = file.filename
-            # Replace problematic characters that might cause issues on some filesystems
-            # but keep most unicode characters intact
-            safe_filename = filename.replace('/', '_').replace('\\', '_').replace('\0', '')
+            # Get the original filename (may contain folder path for folder uploads)
+            original_filename = file.filename
+            
+            # Extract just the basename (remove folder path if present)
+            # This handles both "Folder/Subfolder/file.mp3" and just "file.mp3"
+            # Works with both / (Unix) and \ (Windows) paths
+            safe_filename = os.path.basename(original_filename.replace('\\', '/'))
+            
+            # Remove any remaining problematic characters
+            safe_filename = safe_filename.replace('\0', '')
+            
+            # If filename is empty after processing, generate a unique one
+            if not safe_filename:
+                safe_filename = f"upload_{uuid.uuid4().hex[:8]}.mp3"
+            
+            print(f"📤 Upload: '{original_filename}' → '{safe_filename}'")
             
             # Use session-specific upload folder
             session_upload_folder = os.path.join(app.config['UPLOAD_FOLDER'], session_id)
@@ -1875,15 +1887,18 @@ def upload_chunk():
             # Save file with explicit error handling
             try:
                 file.save(filepath)
-                print(f"✅ Upload OK: {safe_filename} → {filepath}")
+                print(f"✅ Saved: {safe_filename} ({os.path.getsize(filepath)} bytes)")
             except Exception as save_error:
                 print(f"❌ Save error for {safe_filename}: {save_error}")
+                import traceback
+                traceback.print_exc()
                 return jsonify({'error': f'Failed to save file: {str(save_error)}'}), 500
             
             return jsonify({
                 'message': f'File {safe_filename} uploaded successfully', 
                 'session_id': session_id,
-                'filename': safe_filename
+                'filename': safe_filename,
+                'original_filename': original_filename
             })
         
         return jsonify({'error': 'No file provided'}), 400
