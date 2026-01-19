@@ -19,10 +19,10 @@ workers = 1
 worker_class = "gthread"  # threaded worker for handling concurrent HTTP requests
 threads = 16  # Many threads for concurrent uploads/downloads
 
-# Worker timeout - increase for large file uploads and batch processing
-timeout = 600  # 10 minutes for very large batches
-graceful_timeout = 60
-keepalive = 10
+# Worker timeout - increased for 1000+ track batch uploads
+timeout = 1800  # 30 minutes for very large batches (1000+ tracks)
+graceful_timeout = 120
+keepalive = 30
 
 # Request limits - higher for high-RAM system
 max_requests = 5000  # More requests before recycling

@@ -19,6 +19,13 @@ import urllib.parse
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'idbyrivoli-secret-key-2024')
 
+# Configure Flask for large batch uploads (1000+ tracks)
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max per request
+app.config['MAX_FORM_MEMORY_SIZE'] = 100 * 1024 * 1024  # 100MB form memory
+
+# Upload concurrency control - limit simultaneous uploads to prevent server overload
+UPLOAD_SEMAPHORE = threading.Semaphore(int(os.environ.get('MAX_CONCURRENT_UPLOADS', 50)))
+
 # Use absolute paths to avoid confusion
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
@@ -50,8 +57,9 @@ pending_downloads = {}
 pending_downloads_lock = Lock()
 
 # Maximum number of pending tracks before warning (configurable)
-MAX_PENDING_TRACKS = int(os.environ.get('MAX_PENDING_TRACKS', 20))
-PENDING_WARNING_THRESHOLD = int(os.environ.get('PENDING_WARNING_THRESHOLD', 10))
+# Set high to support batch uploads of 1000+ tracks
+MAX_PENDING_TRACKS = int(os.environ.get('MAX_PENDING_TRACKS', 1500))
+PENDING_WARNING_THRESHOLD = int(os.environ.get('PENDING_WARNING_THRESHOLD', 1000))
 
 def get_pending_tracks_count():
     """Get the number of tracks pending download confirmation."""
@@ -1849,7 +1857,13 @@ def upload_chunk():
     Receives a single file upload and saves it to session-specific folder.
     Supports multiple users uploading simultaneously.
     Handles folder uploads where filename may contain path (e.g., "Folder/file.mp3").
+    Uses semaphore to limit concurrent uploads (supports 1000+ track batch uploads).
     """
+    # Acquire semaphore with timeout to prevent deadlocks
+    acquired = UPLOAD_SEMAPHORE.acquire(timeout=300)  # 5 minute timeout
+    if not acquired:
+        return jsonify({'error': 'Server busy, too many concurrent uploads. Please retry.'}), 503
+    
     try:
         session_id = get_session_id()
         
@@ -1908,6 +1922,8 @@ def upload_chunk():
         import traceback
         traceback.print_exc()
         return jsonify({'error': f'Upload error: {str(e)}'}), 500
+    finally:
+        UPLOAD_SEMAPHORE.release()
 
 @app.route('/start_processing', methods=['POST'])
 def start_processing():

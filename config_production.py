@@ -117,9 +117,9 @@ MP3_BITRATE = os.environ.get('MP3_BITRATE', '320')
 # PyTorch memory settings (H100 specific)
 PYTORCH_CUDA_ALLOC_CONF = "max_split_size_mb:512"
 
-# Process limits
-MAX_CONCURRENT_UPLOADS = int(os.environ.get('MAX_CONCURRENT_UPLOADS', 100))
-MAX_QUEUE_SIZE = int(os.environ.get('MAX_QUEUE_SIZE', 1000))
+# Process limits - optimized for 1000+ track batch uploads
+MAX_CONCURRENT_UPLOADS = int(os.environ.get('MAX_CONCURRENT_UPLOADS', 50))  # Concurrent upload connections
+MAX_QUEUE_SIZE = int(os.environ.get('MAX_QUEUE_SIZE', 2000))  # Support 1000+ track batches
 
 # Cleanup settings
 AUTO_CLEANUP_AFTER_DOWNLOAD = os.environ.get('AUTO_CLEANUP', 'true').lower() == 'true'

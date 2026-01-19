@@ -681,6 +681,11 @@
             color: var(--success);
         }
 
+        .track-list-item-status.uploaded {
+            background: rgba(59, 130, 246, 0.15);
+            color: #3b82f6;
+        }
+
         .track-list-item-progress {
             width: 60px;
             height: 3px;
@@ -1476,7 +1481,39 @@
             });
         }
 
-        // Form submit - allows continuous uploads
+        // Configurable batch upload settings for 1000+ file handling
+        const UPLOAD_BATCH_SIZE = 10;  // Number of concurrent uploads
+        const ENQUEUE_BATCH_SIZE = 20; // Number of concurrent enqueue calls
+        
+        // Batch upload helper - uploads multiple files concurrently
+        async function uploadBatch(files, startIdx, totalFiles) {
+            const results = await Promise.allSettled(
+                files.map((file, batchIdx) => {
+                    const globalIdx = startIdx + batchIdx;
+                    updateTrackStatus(file.name, 'uploading', 0);
+                    return uploadFileWithProgress(file, globalIdx, totalFiles)
+                        .then(result => ({ file, result, success: true }))
+                        .catch(error => ({ file, error, success: false }));
+                })
+            );
+            return results.map(r => r.status === 'fulfilled' ? r.value : { ...r.reason, success: false });
+        }
+        
+        // Batch enqueue helper - enqueues multiple files concurrently
+        async function enqueueBatch(filenames) {
+            const results = await Promise.allSettled(
+                filenames.map(filename => 
+                    fetch('/enqueue_file', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ filename })
+                    }).then(r => r.ok ? r.json() : Promise.reject(new Error(`Enqueue failed: ${r.status}`)))
+                )
+            );
+            return results;
+        }
+
+        // Form submit - optimized for 1000+ track batch uploads
         document.getElementById('uploadForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             if (selectedFiles.length === 0) {
@@ -1512,54 +1549,91 @@
             // Clear selection immediately so user can add more
             selectedFiles = [];
             updateFileList();
+            
+            // Show batch info for large uploads
+            if (totalFiles >= 100) {
+                addLog(`📦 Starting batch upload of ${totalFiles} files (${UPLOAD_BATCH_SIZE} concurrent)...`, 'info');
+            }
 
-            for (let i = 0; i < totalFiles; i++) {
-                const file = filesToUpload[i];
+            let uploadedCount = 0;
+            let failedCount = 0;
+            const uploadedFilenames = [];
+            
+            // Process uploads in batches for better throughput
+            for (let i = 0; i < totalFiles; i += UPLOAD_BATCH_SIZE) {
+                const batch = filesToUpload.slice(i, i + UPLOAD_BATCH_SIZE);
+                const batchNum = Math.floor(i / UPLOAD_BATCH_SIZE) + 1;
+                const totalBatches = Math.ceil(totalFiles / UPLOAD_BATCH_SIZE);
                 
-                // Mark as uploading in the track list
-                updateTrackStatus(file.name, 'uploading', 0);
+                if (totalFiles >= 50) {
+                    statusText.textContent = `Uploading batch ${batchNum}/${totalBatches} (${uploadedCount}/${totalFiles} done)...`;
+                }
                 
-                try {
-                    // Upload with progress tracking - returns the server's sanitized filename
-                    const uploadResult = await uploadFileWithProgress(file, i, totalFiles);
-                    const serverFilename = uploadResult.filename || file.name;
-                    
-                    // Small delay to ensure file is fully written
-                    await new Promise(r => setTimeout(r, 100));
-                    
-                    // Enqueue for processing using the server's filename
-                    const enqueueResponse = await fetch('/enqueue_file', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ filename: serverFilename })
-                    });
-                    
-                    if (!enqueueResponse.ok) {
-                        const errorData = await enqueueResponse.json();
-                        throw new Error(errorData.error || `Enqueue failed: ${enqueueResponse.status}`);
-                    }
-                    
-                    // Update track list with server filename and mark as waiting
-                    if (serverFilename !== file.name) {
-                        // Rename in our tracking if server changed the filename
-                        delete allTracks[file.name];
-                        allTracks[serverFilename] = { status: 'waiting', progress: 0, worker: null };
+                // Upload batch concurrently
+                const batchResults = await uploadBatch(batch, i, totalFiles);
+                
+                // Process results
+                for (const result of batchResults) {
+                    if (result.success) {
+                        const serverFilename = result.result.filename || result.file.name;
+                        uploadedFilenames.push({ original: result.file.name, server: serverFilename });
+                        uploadedCount++;
+                        
+                        // Update track status
+                        if (serverFilename !== result.file.name) {
+                            delete allTracks[result.file.name];
+                            allTracks[serverFilename] = { status: 'uploaded', progress: 100, worker: null };
+                        } else {
+                            updateTrackStatus(result.file.name, 'uploaded', 100);
+                        }
                     } else {
-                        updateTrackStatus(file.name, 'waiting');
+                        failedCount++;
+                        addLog(`Failed: ${result.file?.name || 'Unknown'} - ${result.error?.message || 'Unknown error'}`, 'error');
+                        removeTrackFromList(result.file?.name);
                     }
-                    updateFullTrackListUI();
-                } catch (error) {
-                    console.error(`Upload error for ${file.name}:`, error);
-                    addLog(`Failed: ${file.name} - ${error.message}`, 'error');
-                    // Remove from track list on failure
-                    removeTrackFromList(file.name);
+                }
+                
+                // Update overall progress
+                const uploadProgress = Math.round((i + batch.length) / totalFiles * 50);
+                progressFill.style.width = uploadProgress + '%';
+                progressValue.textContent = uploadProgress + '%';
+                updateFullTrackListUI();
+            }
+            
+            // Now enqueue all successfully uploaded files in batches
+            progressLabel.textContent = 'Queueing';
+            statusText.textContent = `Queueing ${uploadedFilenames.length} files for processing...`;
+            
+            let enqueuedCount = 0;
+            for (let i = 0; i < uploadedFilenames.length; i += ENQUEUE_BATCH_SIZE) {
+                const batch = uploadedFilenames.slice(i, i + ENQUEUE_BATCH_SIZE).map(f => f.server);
+                await enqueueBatch(batch);
+                
+                // Mark as waiting
+                batch.forEach(filename => {
+                    updateTrackStatus(filename, 'waiting');
+                });
+                
+                enqueuedCount += batch.length;
+                const enqueueProgress = 50 + Math.round(enqueuedCount / uploadedFilenames.length * 50);
+                progressFill.style.width = enqueueProgress + '%';
+                progressValue.textContent = enqueueProgress + '%';
+                
+                if (uploadedFilenames.length >= 50) {
+                    statusText.textContent = `Queued ${enqueuedCount}/${uploadedFilenames.length} files...`;
                 }
             }
+            
+            updateFullTrackListUI();
 
             progressFill.style.width = '100%';
             progressValue.textContent = '100%';
             progressLabel.textContent = 'Processing';
-            statusText.textContent = `${totalFiles} files queued. Processing in background...`;
+            statusText.textContent = `${uploadedCount} files queued. Processing in background...`;
+            
+            if (failedCount > 0) {
+                addLog(`⚠️ ${failedCount} files failed to upload`, 'error');
+            }
             
             // Re-enable upload immediately - users can add more files while processing
             isUploading = false;
@@ -1567,7 +1641,7 @@
             submitBtn.innerHTML = '<i data-lucide="plus"></i> Add More Files';
             lucide.createIcons();
             
-            showToast(`${totalFiles} files added to queue`);
+            showToast(`${uploadedCount} files added to queue` + (failedCount > 0 ? ` (${failedCount} failed)` : ''));
         });
 
         function startPolling() {
@@ -1903,8 +1977,8 @@
             // Update total count
             document.getElementById('totalTrackCount').textContent = entries.length;
             
-            // Calculate status counts
-            const counts = { selected: 0, uploading: 0, waiting: 0, processing: 0, completed: 0 };
+            // Calculate status counts (include 'uploaded' as uploading for display)
+            const counts = { selected: 0, uploading: 0, uploaded: 0, waiting: 0, processing: 0, completed: 0 };
             entries.forEach(([_, info]) => {
                 if (counts[info.status] !== undefined) counts[info.status]++;
             });
@@ -1915,7 +1989,7 @@
             const waitingBadge = document.getElementById('waitingBadge');
             const completedBadge = document.getElementById('completedBadge');
             
-            const uploadingTotal = counts.selected + counts.uploading;
+            const uploadingTotal = counts.selected + counts.uploading + counts.uploaded;
             uploadingBadge.style.display = uploadingTotal > 0 ? 'inline-flex' : 'none';
             document.getElementById('uploadingCount').textContent = uploadingTotal;
             
@@ -1938,6 +2012,7 @@
             const groups = {
                 processing: [],
                 uploading: [],
+                uploaded: [],
                 selected: [],
                 waiting: [],
                 completed: []
@@ -1951,6 +2026,9 @@
             
             let html = '';
             
+            // For large track lists (100+), limit displayed items per section
+            const MAX_DISPLAY_PER_SECTION = entries.length > 500 ? 20 : (entries.length > 100 ? 50 : 100);
+            
             // Processing tracks first
             if (groups.processing.length > 0) {
                 html += '<div class="track-list-section-header">Processing</div>';
@@ -1959,28 +2037,38 @@
                 });
             }
             
-            // Uploading tracks
-            if (groups.uploading.length > 0 || groups.selected.length > 0) {
-                html += '<div class="track-list-section-header">Uploading</div>';
-                [...groups.uploading, ...groups.selected].forEach(track => {
-                    html += renderTrackItem({ ...track, status: 'uploading' });
+            // Uploading tracks (combine uploading, uploaded, selected)
+            const uploadingItems = [...groups.uploading, ...groups.uploaded, ...groups.selected];
+            if (uploadingItems.length > 0) {
+                html += `<div class="track-list-section-header">Uploading (${uploadingItems.length})</div>`;
+                uploadingItems.slice(0, MAX_DISPLAY_PER_SECTION).forEach(track => {
+                    html += renderTrackItem({ ...track, status: track.status === 'uploaded' ? 'uploaded' : 'uploading' });
                 });
+                if (uploadingItems.length > MAX_DISPLAY_PER_SECTION) {
+                    html += `<div class="track-list-item" style="justify-content:center;color:var(--text-muted);">+${uploadingItems.length - MAX_DISPLAY_PER_SECTION} more uploading...</div>`;
+                }
             }
             
             // Waiting tracks
             if (groups.waiting.length > 0) {
-                html += '<div class="track-list-section-header">Waiting in Queue</div>';
-                groups.waiting.forEach((track, index) => {
+                html += `<div class="track-list-section-header">Waiting in Queue (${groups.waiting.length})</div>`;
+                groups.waiting.slice(0, MAX_DISPLAY_PER_SECTION).forEach((track, index) => {
                     html += renderTrackItem(track, index + 1);
                 });
+                if (groups.waiting.length > MAX_DISPLAY_PER_SECTION) {
+                    html += `<div class="track-list-item" style="justify-content:center;color:var(--text-muted);">+${groups.waiting.length - MAX_DISPLAY_PER_SECTION} more in queue...</div>`;
+                }
             }
             
             // Completed tracks
             if (groups.completed.length > 0) {
-                html += '<div class="track-list-section-header">Completed</div>';
-                groups.completed.forEach(track => {
+                html += `<div class="track-list-section-header">Completed (${groups.completed.length})</div>`;
+                groups.completed.slice(0, MAX_DISPLAY_PER_SECTION).forEach(track => {
                     html += renderTrackItem(track);
                 });
+                if (groups.completed.length > MAX_DISPLAY_PER_SECTION) {
+                    html += `<div class="track-list-item" style="justify-content:center;color:var(--text-muted);">+${groups.completed.length - MAX_DISPLAY_PER_SECTION} more completed...</div>`;
+                }
             }
             
             container.innerHTML = html;
@@ -2002,6 +2090,12 @@
                     checkboxClass = 'uploading';
                     statusLabel = progress > 0 ? `${progress}%` : 'Uploading';
                     showProgress = true;  // Show progress bar for uploads too
+                    break;
+                case 'uploaded':
+                    checkboxIcon = '<i data-lucide="check-circle"></i>';
+                    checkboxClass = 'uploading';
+                    statusLabel = 'Uploaded';
+                    showProgress = false;
                     break;
                 case 'waiting':
                     checkboxIcon = '<i data-lucide="clock"></i>';
