@@ -686,6 +686,21 @@
             color: #3b82f6;
         }
 
+        .track-list-item-status.failed {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--error);
+        }
+
+        .track-checkbox.failed {
+            border-color: var(--error);
+            background: rgba(239, 68, 68, 0.1);
+        }
+
+        .track-checkbox.failed svg {
+            color: var(--error);
+            opacity: 1;
+        }
+
         .track-list-item-progress {
             width: 60px;
             height: 3px;
@@ -1192,6 +1207,11 @@
                                 <i data-lucide="check-circle-2"></i>
                                 <span id="completedCount">0</span> done
                             </div>
+                            <div class="status-badge failed" id="failedBadge" style="display: none; background: rgba(239, 68, 68, 0.2); color: var(--error);">
+                                <i data-lucide="alert-circle"></i>
+                                <span id="failedCount">0</span> failed
+                                <button onclick="retryFailedFiles()" style="margin-left: 8px; padding: 2px 8px; background: var(--error); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px;">Retry</button>
+                            </div>
                         </div>
                         
                         <!-- Full track list -->
@@ -1666,8 +1686,11 @@
                     // Get list of completed track names from results
                     const completedTracks = (status.results || []).map(r => r.original);
                     
-                    // Sync full track list with server queue items
-                    syncTracksFromQueueItems(status.queue_items || [], completedTracks);
+                    // Get failed files from server status
+                    const failedFiles = status.failed_files || [];
+                    
+                    // Sync full track list with server queue items (including failed files)
+                    syncTracksFromQueueItems(status.queue_items || [], completedTracks, failedFiles);
 
                     // Always update results if there are new ones
                     if (status.results?.length > 0 && status.results.length !== lastResultsCount) {
@@ -1939,6 +1962,68 @@
             }
         }
 
+        // Retry failed files - re-queue them for processing
+        async function retryFailedFiles(specificFiles = null) {
+            try {
+                const body = specificFiles ? { filenames: specificFiles } : {};
+                const response = await fetch('/retry_failed', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const result = await response.json();
+                
+                if (result.retried > 0) {
+                    // Update local track status to 'waiting' for retried files
+                    (result.filenames || []).forEach(filename => {
+                        if (allTracks[filename]) {
+                            allTracks[filename].status = 'waiting';
+                            allTracks[filename].progress = 0;
+                            allTracks[filename].error = null;
+                        }
+                    });
+                    updateFullTrackListUI();
+                    showToast(`🔄 ${result.retried} fichier(s) remis en file d'attente`);
+                } else {
+                    showToast('Aucun fichier en échec à réessayer');
+                }
+            } catch (e) {
+                console.error('Retry failed:', e);
+                showToast('Erreur lors de la tentative de réessai');
+            }
+        }
+
+        // Clear failed files from the list without retrying
+        async function clearFailedFiles(specificFiles = null) {
+            try {
+                const body = specificFiles ? { filenames: specificFiles } : {};
+                const response = await fetch('/clear_failed', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const result = await response.json();
+                
+                if (result.cleared > 0) {
+                    // Remove failed files from local track list
+                    Object.keys(allTracks).forEach(filename => {
+                        if (allTracks[filename].status === 'failed') {
+                            if (!specificFiles || specificFiles.includes(filename)) {
+                                delete allTracks[filename];
+                            }
+                        }
+                    });
+                    updateFullTrackListUI();
+                    showToast(`🗑️ ${result.cleared} fichier(s) effacé(s)`);
+                } else {
+                    showToast('Aucun fichier en échec à effacer');
+                }
+            } catch (e) {
+                console.error('Clear failed:', e);
+                showToast('Erreur lors de la suppression');
+            }
+        }
+
         function escapeHtml(text) {
             const div = document.createElement('div');
             div.textContent = text;
@@ -1978,7 +2063,7 @@
             document.getElementById('totalTrackCount').textContent = entries.length;
             
             // Calculate status counts (include 'uploaded' as uploading for display)
-            const counts = { selected: 0, uploading: 0, uploaded: 0, waiting: 0, processing: 0, completed: 0 };
+            const counts = { selected: 0, uploading: 0, uploaded: 0, waiting: 0, processing: 0, completed: 0, failed: 0 };
             entries.forEach(([_, info]) => {
                 if (counts[info.status] !== undefined) counts[info.status]++;
             });
@@ -1988,6 +2073,7 @@
             const processingBadge = document.getElementById('processingBadge');
             const waitingBadge = document.getElementById('waitingBadge');
             const completedBadge = document.getElementById('completedBadge');
+            const failedBadge = document.getElementById('failedBadge');
             
             const uploadingTotal = counts.selected + counts.uploading + counts.uploaded;
             uploadingBadge.style.display = uploadingTotal > 0 ? 'inline-flex' : 'none';
@@ -2002,6 +2088,9 @@
             completedBadge.style.display = counts.completed > 0 ? 'inline-flex' : 'none';
             document.getElementById('completedCount').textContent = counts.completed;
             
+            failedBadge.style.display = counts.failed > 0 ? 'inline-flex' : 'none';
+            document.getElementById('failedCount').textContent = counts.failed;
+            
             // Empty state
             if (entries.length === 0) {
                 container.innerHTML = '<div class="queue-empty">No tracks yet</div>';
@@ -2015,7 +2104,8 @@
                 uploaded: [],
                 selected: [],
                 waiting: [],
-                completed: []
+                completed: [],
+                failed: []
             };
             
             entries.forEach(([filename, info]) => {
@@ -2029,7 +2119,19 @@
             // For large track lists (100+), limit displayed items per section
             const MAX_DISPLAY_PER_SECTION = entries.length > 500 ? 20 : (entries.length > 100 ? 50 : 100);
             
-            // Processing tracks first
+            // Failed tracks first (most important to see)
+            if (groups.failed.length > 0) {
+                html += `<div class="track-list-section-header" style="color: var(--error);">
+                    ❌ Failed (${groups.failed.length})
+                    <button onclick="retryFailedFiles()" style="margin-left: 12px; padding: 4px 12px; background: var(--error); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">Retry All</button>
+                    <button onclick="clearFailedFiles()" style="margin-left: 8px; padding: 4px 12px; background: var(--bg-tertiary); color: var(--text-secondary); border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">Clear</button>
+                </div>`;
+                groups.failed.forEach(track => {
+                    html += renderTrackItem(track);
+                });
+            }
+            
+            // Processing tracks
             if (groups.processing.length > 0) {
                 html += '<div class="track-list-section-header">Processing</div>';
                 groups.processing.forEach(track => {
@@ -2111,6 +2213,11 @@
                     checkboxClass = 'checked';
                     statusLabel = 'Done';
                     break;
+                case 'failed':
+                    checkboxIcon = '<i data-lucide="alert-circle"></i>';
+                    checkboxClass = 'failed';
+                    statusLabel = track.error ? track.error.substring(0, 30) + '...' : 'Failed';
+                    break;
             }
             
             // Different progress bar color for upload (blue) vs processing (white)
@@ -2130,20 +2237,43 @@
             `;
         }
 
-        function syncTracksFromQueueItems(queueItems, completedTracks) {
+        function syncTracksFromQueueItems(queueItems, completedTracks, failedFiles = []) {
             // Update tracks from queue items (server-side queue)
             const queueFilenames = new Set();
+            const failedFilenames = new Set(failedFiles.map(f => f.filename));
             
             queueItems.forEach(item => {
                 queueFilenames.add(item.filename);
-                const status = item.status === 'processing' ? 'processing' : 'waiting';
+                // Handle failed status from server
+                const status = item.status === 'failed' ? 'failed' : 
+                               item.status === 'processing' ? 'processing' : 'waiting';
                 
                 if (!allTracks[item.filename]) {
-                    allTracks[item.filename] = { status, progress: item.progress || 0, worker: item.worker };
+                    allTracks[item.filename] = { 
+                        status, 
+                        progress: item.progress || 0, 
+                        worker: item.worker,
+                        error: item.step || null
+                    };
                 } else {
                     allTracks[item.filename].status = status;
                     allTracks[item.filename].progress = item.progress || 0;
                     allTracks[item.filename].worker = item.worker;
+                    if (item.step) allTracks[item.filename].error = item.step;
+                }
+            });
+            
+            // Mark failed files from server status
+            failedFiles.forEach(failed => {
+                if (allTracks[failed.filename]) {
+                    allTracks[failed.filename].status = 'failed';
+                    allTracks[failed.filename].error = failed.error;
+                } else {
+                    allTracks[failed.filename] = {
+                        status: 'failed',
+                        progress: 0,
+                        error: failed.error
+                    };
                 }
             });
             
@@ -2156,19 +2286,21 @@
                     trackName.includes(key.replace(/\.mp3$/i, ''))
                 );
                 
-                if (matchingKey) {
+                if (matchingKey && !failedFilenames.has(matchingKey)) {
                     allTracks[matchingKey].status = 'completed';
                     allTracks[matchingKey].progress = 100;
                 }
             });
             
-            // Remove tracks that are no longer in queue and not completed/uploading
+            // Remove tracks that are no longer in queue and not completed/uploading/failed
             Object.keys(allTracks).forEach(filename => {
                 const track = allTracks[filename];
                 if (!queueFilenames.has(filename) && 
+                    !failedFilenames.has(filename) &&
                     track.status !== 'completed' && 
                     track.status !== 'uploading' &&
-                    track.status !== 'selected') {
+                    track.status !== 'selected' &&
+                    track.status !== 'failed') {
                     // Track finished or was removed - check if completed
                     const isCompleted = completedTracks.some(name => 
                         filename === name || 

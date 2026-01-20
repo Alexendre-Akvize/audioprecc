@@ -216,8 +216,15 @@ def get_job_status(session_id=None):
                 'results': [],
                 'error': None,
                 'logs': [],
-                'session_id': session_id
+                'session_id': session_id,
+                'failed_files': [],  # Track files that failed processing
+                'retry_count': {}    # Track retry attempts per file
             }
+        # Ensure existing sessions have the new fields
+        if 'failed_files' not in sessions_status[session_id]:
+            sessions_status[session_id]['failed_files'] = []
+        if 'retry_count' not in sessions_status[session_id]:
+            sessions_status[session_id]['retry_count'] = {}
         return sessions_status[session_id]
 
 # Global variable for backward compatibility
@@ -1531,9 +1538,11 @@ def worker(worker_id):
             if isinstance(queue_item, dict):
                 filename = queue_item['filename']
                 session_id = queue_item.get('session_id', 'global')
+                is_retry = queue_item.get('is_retry', False)
             else:
                 filename = queue_item
                 session_id = 'global'
+                is_retry = False
             
             # Get session-specific status
             current_status = get_job_status(session_id)
@@ -1566,9 +1575,15 @@ def worker(worker_id):
                     print(f"   ⏳ Waiting for file ({retry + 1}/5): {filename}")
             
             if not file_found:
-                log_message(f"⚠️ Fichier introuvable après 5 tentatives (ignoré) : {filename}", session_id)
+                error_msg = f"Fichier introuvable après 5 tentatives: {filename}"
+                log_message(f"⚠️ {error_msg}", session_id)
                 log_message(f"   Chemins vérifiés: {session_upload_folder}/{filename} et {UPLOAD_FOLDER}/{filename}", session_id)
-                remove_from_queue_tracker(filename)
+                
+                # Track as failed file
+                add_failed_file(session_id, filename, error_msg, filepath)
+                update_queue_item(filename, status='failed', progress=0, step='❌ Fichier introuvable')
+                
+                # Don't remove from tracker - keep showing as failed
                 track_queue.task_done()
                 if track_queue.empty():
                     current_status['state'] = 'idle'
@@ -1579,22 +1594,34 @@ def worker(worker_id):
             # Update tracker: now processing
             update_queue_item(filename, status='processing', worker=worker_id, progress=0, step='Démarrage...')
             
-            print(f"🔄 Worker {worker_id} traite: {filename}")
-            process_single_track(filepath, filename, session_id, worker_id)
+            print(f"🔄 Worker {worker_id} traite: {filename}" + (" (RETRY)" if is_retry else ""))
+            success, error_msg = process_single_track(filepath, filename, session_id, worker_id, is_retry)
             
-            # Remove from tracker when done
-            remove_from_queue_tracker(filename)
+            # Handle result
+            if success:
+                # Remove from tracker when done successfully
+                remove_from_queue_tracker(filename)
+            else:
+                # Keep in tracker as failed - don't remove
+                log_message(f"❌ [{session_id}] Worker {worker_id}: Échec pour {filename}: {error_msg}", session_id)
+            
             track_queue.task_done()
             
             # Reset state to idle if queue is empty
             if track_queue.empty():
                 current_status['state'] = 'idle'
-                current_status['current_step'] = 'Prêt pour de nouveaux fichiers'
+                failed_count = len(current_status.get('failed_files', []))
+                if failed_count > 0:
+                    current_status['current_step'] = f'⚠️ {failed_count} fichier(s) en échec - Cliquer "Réessayer" pour relancer'
+                else:
+                    current_status['current_step'] = 'Prêt pour de nouveaux fichiers'
                 current_status['current_filename'] = ''
-                log_message("✅ File d'attente terminée - Prêt pour de nouveaux fichiers", session_id)
+                log_message(f"✅ File d'attente terminée" + (f" - {failed_count} échec(s)" if failed_count > 0 else " - Tous les fichiers traités avec succès"), session_id)
                 
         except Exception as e:
             print(f"Worker {worker_id} Error: {e}")
+            import traceback
+            traceback.print_exc()
             log_message(f"Erreur Worker {worker_id}: {e}")
 
 # Start multiple worker threads
@@ -1605,175 +1632,478 @@ for i in range(NUM_WORKERS):
     worker_threads.append(t)
 print(f"🚀 {NUM_WORKERS} workers démarrés")
 
-# Restore pending files on startup
-def restore_queue():
-    """Scans upload folder and re-queues any MP3 files found."""
-    log_message("🔄 Vérification des fichiers en attente...")
-    upload_files = [f for f in os.listdir(UPLOAD_FOLDER) if f.lower().endswith('.mp3')]
+# Configuration for startup cleanup
+CLEANUP_ON_START = os.environ.get('CLEANUP_ON_START', 'true').lower() == 'true'
+DELETE_AFTER_DOWNLOAD = os.environ.get('DELETE_AFTER_DOWNLOAD', 'true').lower() == 'true'
+
+def startup_cleanup():
+    """
+    Clears all storage on server startup to ensure clean state.
+    This prevents disk from filling up between restarts.
+    Can be disabled by setting CLEANUP_ON_START=false
+    """
+    if not CLEANUP_ON_START:
+        log_message("⏭️ Startup cleanup disabled (CLEANUP_ON_START=false)")
+        return
     
-    count = 0
-    for f in upload_files:
-        track_queue.put(f)
-        count += 1
+    log_message("🧹 ════════════════════════════════════════════════")
+    log_message("🧹 STARTUP CLEANUP: Clearing all storage...")
+    
+    total_deleted = 0
+    total_size_freed = 0
+    
+    folders_to_clean = [
+        (UPLOAD_FOLDER, "uploads"),
+        (OUTPUT_FOLDER, "output"),
+        (PROCESSED_FOLDER, "processed")
+    ]
+    
+    for folder, name in folders_to_clean:
+        if not os.path.exists(folder):
+            continue
             
-    if count > 0:
-        log_message(f"♻️ Restauration de {count} fichiers dans la file d'attente.")
+        folder_size = 0
+        file_count = 0
+        
+        for item in os.listdir(folder):
+            item_path = os.path.join(folder, item)
+            try:
+                if os.path.isfile(item_path) or os.path.islink(item_path):
+                    folder_size += os.path.getsize(item_path)
+                    os.unlink(item_path)
+                    file_count += 1
+                elif os.path.isdir(item_path):
+                    # Calculate dir size first
+                    for dirpath, dirnames, filenames in os.walk(item_path):
+                        for f in filenames:
+                            fp = os.path.join(dirpath, f)
+                            try:
+                                folder_size += os.path.getsize(fp)
+                            except:
+                                pass
+                    shutil.rmtree(item_path)
+                    file_count += 1
+            except Exception as e:
+                print(f"   ⚠️ Could not delete {item_path}: {e}")
+        
+        total_deleted += file_count
+        total_size_freed += folder_size
+        
+        size_mb = folder_size / (1024 * 1024)
+        if file_count > 0:
+            log_message(f"   🗑️ {name}: {file_count} items deleted ({size_mb:.1f} MB)")
+    
+    # Also clean covers folder
+    covers_folder = os.path.join(BASE_DIR, 'static', 'covers')
+    if os.path.exists(covers_folder):
+        cover_count = 0
+        for filename in os.listdir(covers_folder):
+            if filename.startswith('cover_'):  # Only delete extracted covers
+                try:
+                    file_path = os.path.join(covers_folder, filename)
+                    total_size_freed += os.path.getsize(file_path)
+                    os.unlink(file_path)
+                    cover_count += 1
+                except:
+                    pass
+        if cover_count > 0:
+            log_message(f"   🗑️ covers: {cover_count} items deleted")
+    
+    # Clear pending downloads tracker
+    with pending_downloads_lock:
+        pending_downloads.clear()
+    
+    total_mb = total_size_freed / (1024 * 1024)
+    total_gb = total_size_freed / (1024 * 1024 * 1024)
+    
+    if total_gb >= 1:
+        log_message(f"🧹 CLEANUP COMPLETE: {total_deleted} items, {total_gb:.2f} GB freed")
+    else:
+        log_message(f"🧹 CLEANUP COMPLETE: {total_deleted} items, {total_mb:.1f} MB freed")
+    log_message("🧹 ════════════════════════════════════════════════")
 
-# Call restore on startup
-restore_queue()
+# Call startup cleanup instead of restore_queue
+startup_cleanup()
 
-# Modified process function for SINGLE track
-def process_single_track(filepath, filename, session_id='global', worker_id=None):
+# Configuration for periodic cleanup
+MAX_FILE_AGE_HOURS = int(os.environ.get('MAX_FILE_AGE_HOURS', 1))  # Delete files older than 1 hour by default
+CLEANUP_INTERVAL_MINUTES = int(os.environ.get('CLEANUP_INTERVAL_MINUTES', 15))  # Check every 15 minutes
+
+def periodic_cleanup():
+    """
+    Background thread that periodically cleans up old files.
+    Deletes processed files older than MAX_FILE_AGE_HOURS.
+    """
+    while True:
+        try:
+            time.sleep(CLEANUP_INTERVAL_MINUTES * 60)  # Sleep first, then cleanup
+            
+            now = time.time()
+            max_age_seconds = MAX_FILE_AGE_HOURS * 3600
+            
+            cleaned_count = 0
+            cleaned_size = 0
+            
+            # Clean old files in processed folder
+            if os.path.exists(PROCESSED_FOLDER):
+                for item in os.listdir(PROCESSED_FOLDER):
+                    item_path = os.path.join(PROCESSED_FOLDER, item)
+                    try:
+                        # Get modification time of folder
+                        mtime = os.path.getmtime(item_path)
+                        age = now - mtime
+                        
+                        if age > max_age_seconds:
+                            if os.path.isdir(item_path):
+                                # Calculate size before deleting
+                                for dirpath, dirnames, filenames in os.walk(item_path):
+                                    for f in filenames:
+                                        try:
+                                            cleaned_size += os.path.getsize(os.path.join(dirpath, f))
+                                        except:
+                                            pass
+                                shutil.rmtree(item_path)
+                            else:
+                                cleaned_size += os.path.getsize(item_path)
+                                os.unlink(item_path)
+                            cleaned_count += 1
+                    except Exception as e:
+                        pass
+            
+            # Clean old htdemucs output
+            htdemucs_folder = os.path.join(OUTPUT_FOLDER, 'htdemucs')
+            if os.path.exists(htdemucs_folder):
+                for item in os.listdir(htdemucs_folder):
+                    item_path = os.path.join(htdemucs_folder, item)
+                    try:
+                        mtime = os.path.getmtime(item_path)
+                        age = now - mtime
+                        
+                        if age > max_age_seconds:
+                            if os.path.isdir(item_path):
+                                for dirpath, dirnames, filenames in os.walk(item_path):
+                                    for f in filenames:
+                                        try:
+                                            cleaned_size += os.path.getsize(os.path.join(dirpath, f))
+                                        except:
+                                            pass
+                                shutil.rmtree(item_path)
+                            else:
+                                cleaned_size += os.path.getsize(item_path)
+                                os.unlink(item_path)
+                            cleaned_count += 1
+                    except:
+                        pass
+            
+            # Clean old upload files
+            if os.path.exists(UPLOAD_FOLDER):
+                for item in os.listdir(UPLOAD_FOLDER):
+                    item_path = os.path.join(UPLOAD_FOLDER, item)
+                    try:
+                        mtime = os.path.getmtime(item_path)
+                        age = now - mtime
+                        
+                        if age > max_age_seconds:
+                            if os.path.isdir(item_path):
+                                for dirpath, dirnames, filenames in os.walk(item_path):
+                                    for f in filenames:
+                                        try:
+                                            cleaned_size += os.path.getsize(os.path.join(dirpath, f))
+                                        except:
+                                            pass
+                                shutil.rmtree(item_path)
+                            else:
+                                cleaned_size += os.path.getsize(item_path)
+                                os.unlink(item_path)
+                            cleaned_count += 1
+                    except:
+                        pass
+            
+            if cleaned_count > 0:
+                size_mb = cleaned_size / (1024 * 1024)
+                print(f"🧹 PERIODIC CLEANUP: {cleaned_count} old items deleted ({size_mb:.1f} MB)")
+                
+        except Exception as e:
+            print(f"⚠️ Periodic cleanup error: {e}")
+
+# Start periodic cleanup thread
+cleanup_thread = threading.Thread(target=periodic_cleanup, daemon=True)
+cleanup_thread.start()
+
+# Log cleanup configuration
+print(f"")
+print(f"🔧 ════════════════════════════════════════════════")
+print(f"🔧 STORAGE MANAGEMENT SETTINGS:")
+print(f"   CLEANUP_ON_START: {CLEANUP_ON_START}")
+print(f"   DELETE_AFTER_DOWNLOAD: {DELETE_AFTER_DOWNLOAD}")
+print(f"   MAX_FILE_AGE_HOURS: {MAX_FILE_AGE_HOURS}h")
+print(f"   CLEANUP_INTERVAL_MINUTES: {CLEANUP_INTERVAL_MINUTES}min")
+print(f"🔧 ════════════════════════════════════════════════")
+print(f"")
+
+# Configuration for retry logic
+MAX_RETRY_ATTEMPTS = int(os.environ.get('MAX_RETRY_ATTEMPTS', 3))
+RETRY_DELAY_SECONDS = int(os.environ.get('RETRY_DELAY_SECONDS', 5))
+
+def add_failed_file(session_id, filename, error_message, filepath=None):
+    """Add a file to the failed files list for a session."""
+    current_status = get_job_status(session_id)
+    
+    # Check if already in failed list
+    for failed in current_status['failed_files']:
+        if failed['filename'] == filename:
+            failed['error'] = error_message
+            failed['retry_count'] = current_status['retry_count'].get(filename, 0)
+            failed['timestamp'] = time.time()
+            return
+    
+    # Add new failed entry
+    current_status['failed_files'].append({
+        'filename': filename,
+        'filepath': filepath,
+        'error': error_message,
+        'retry_count': current_status['retry_count'].get(filename, 0),
+        'timestamp': time.time()
+    })
+    log_message(f"❌ [{session_id}] Fichier ajouté aux échecs : {filename} - {error_message}", session_id)
+
+def remove_failed_file(session_id, filename):
+    """Remove a file from the failed files list (e.g., after successful retry)."""
+    current_status = get_job_status(session_id)
+    current_status['failed_files'] = [f for f in current_status['failed_files'] if f['filename'] != filename]
+
+# Modified process function for SINGLE track with RETRY LOGIC
+def process_single_track(filepath, filename, session_id='global', worker_id=None, is_retry=False):
+    """
+    Process a single track with comprehensive retry logic.
+    Returns: (success: bool, error_message: str or None)
+    """
     # Get session-specific status
     current_status = get_job_status(session_id)
+    
+    # Track retry attempts
+    if filename not in current_status['retry_count']:
+        current_status['retry_count'][filename] = 0
     
     # Ensure CUDA is available (re-check in case it wasn't ready at startup)
     device = ensure_cuda_device()
     
-    try:
-        current_status['state'] = 'processing'
-        current_status['current_filename'] = filename
-        current_status['current_step'] = "Séparation IA (Demucs)..."
-        log_message(f"🚀 [{session_id}] Début traitement : {filename} (Device: {device})", session_id)
+    attempt = 0
+    max_attempts = MAX_RETRY_ATTEMPTS
+    last_error = None
+    
+    while attempt < max_attempts:
+        attempt += 1
+        retry_label = f" (Tentative {attempt}/{max_attempts})" if attempt > 1 or is_retry else ""
         
-        # Update queue tracker
-        update_queue_item(filename, status='processing', worker=worker_id, progress=0, step=f'Séparation IA ({device})...')
-        
-        track_name = os.path.splitext(filename)[0]
-        
-        # 1. Run Demucs separation (OPTIMIZED FOR H100 80GB + 240GB RAM)
-        def run_demucs_with_device(device):
-            device_emoji = "🚀 GPU" if device == 'cuda' else "💻 CPU"
-            log_message(f"🎵 Séparation vocale/instrumentale ({device_emoji})...")
+        try:
+            current_status['state'] = 'processing'
+            current_status['current_filename'] = filename
+            current_status['current_step'] = f"Séparation IA (Demucs)...{retry_label}"
+            log_message(f"🚀 [{session_id}] Début traitement : {filename} (Device: {device}){retry_label}", session_id)
             
-            # H100 80GB + 240GB RAM optimizations:
-            # - Maximum -j jobs (GPU has plenty of VRAM)
-            # - Max segment size for htdemucs
-            # - Minimal overlap for maximum speed
-            if device == 'cuda':
-                try:
-                    import torch
-                    import psutil
-                    gpu_mem_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-                    ram_gb = psutil.virtual_memory().total / (1024**3)
-                    
-                    # H100 + 240GB RAM: Maximum parallelism
-                    if gpu_mem_gb >= 70 and ram_gb >= 200:
-                        jobs = 20  # Maximum for H100 with high RAM
-                    elif gpu_mem_gb >= 70:
-                        jobs = 16
-                    elif gpu_mem_gb >= 40:
-                        jobs = 12
-                    else:
-                        jobs = 8
-                except:
-                    jobs = 8
-            else:
-                jobs = max(4, CPU_COUNT)
+            # Update queue tracker
+            update_queue_item(filename, status='processing', worker=worker_id, progress=0, step=f'Séparation IA ({device})...{retry_label}')
             
-            cmd = [
-                'python3', '-m', 'demucs',
-                '--two-stems=vocals',
-                '-n', 'htdemucs',
-                '--mp3',
-                '--mp3-bitrate', '320',
-                '-j', str(jobs),
-                '--segment', '7',              # Max segment size (integer)
-                '--overlap', '0.1',            # Minimal overlap for speed
-                '--device', device,
-                '-o', OUTPUT_FOLDER,
-                filepath
-            ]
+            track_name = os.path.splitext(filename)[0]
             
-            # Log the exact command for debugging
-            cmd_str = ' '.join(cmd)
-            print(f"🔧 DEMUCS COMMAND: {cmd_str}")
-            log_message(f"🔧 Device: {device}, Jobs: {jobs}")
-            
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                universal_newlines=True
-            )
-            
-            output_lines = []
-            for line in proc.stdout:
-                print(line, end='')
-                output_lines.append(line)
+            # 1. Run Demucs separation (OPTIMIZED FOR H100 80GB + 240GB RAM)
+            def run_demucs_with_device(device):
+                device_emoji = "🚀 GPU" if device == 'cuda' else "💻 CPU"
+                log_message(f"🎵 Séparation vocale/instrumentale ({device_emoji})...")
                 
-                # Check for CUDA/GPU related messages
-                line_lower = line.lower()
-                if 'cuda' in line_lower or 'gpu' in line_lower or 'cpu' in line_lower:
-                    log_message(f"🔍 Demucs: {line.strip()}")
-                
-                if "%|" in line:
+                # H100 80GB + 240GB RAM optimizations:
+                # - Maximum -j jobs (GPU has plenty of VRAM)
+                # - Max segment size for htdemucs
+                # - Minimal overlap for maximum speed
+                if device == 'cuda':
                     try:
-                        parts = line.split('%|')
-                        if len(parts) > 0:
-                            percent_part = parts[0].strip()
-                            p_match = re.search(r'(\d+)$', percent_part)
-                            if p_match:
-                                track_percent = int(p_match.group(1))
-                                current_status['progress'] = int(track_percent * 0.7)
-                                # Update queue tracker with progress
-                                update_queue_item(filename, progress=int(track_percent * 0.7), step=f'Séparation IA {track_percent}%')
+                        import torch
+                        import psutil
+                        gpu_mem_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                        ram_gb = psutil.virtual_memory().total / (1024**3)
+                        
+                        # H100 + 240GB RAM: Maximum parallelism
+                        if gpu_mem_gb >= 70 and ram_gb >= 200:
+                            jobs = 20  # Maximum for H100 with high RAM
+                        elif gpu_mem_gb >= 70:
+                            jobs = 16
+                        elif gpu_mem_gb >= 40:
+                            jobs = 12
+                        else:
+                            jobs = 8
                     except:
-                        pass
+                        jobs = 8
+                else:
+                    jobs = max(4, CPU_COUNT)
+                
+                cmd = [
+                    'python3', '-m', 'demucs',
+                    '--two-stems=vocals',
+                    '-n', 'htdemucs',
+                    '--mp3',
+                    '--mp3-bitrate', '320',
+                    '-j', str(jobs),
+                    '--segment', '7',              # Max segment size (integer)
+                    '--overlap', '0.1',            # Minimal overlap for speed
+                    '--device', device,
+                    '-o', OUTPUT_FOLDER,
+                    filepath
+                ]
+                
+                # Log the exact command for debugging
+                cmd_str = ' '.join(cmd)
+                print(f"🔧 DEMUCS COMMAND: {cmd_str}")
+                log_message(f"🔧 Device: {device}, Jobs: {jobs}")
+                
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    universal_newlines=True
+                )
+                
+                output_lines = []
+                for line in proc.stdout:
+                    print(line, end='')
+                    output_lines.append(line)
+                    
+                    # Check for CUDA/GPU related messages
+                    line_lower = line.lower()
+                    if 'cuda' in line_lower or 'gpu' in line_lower or 'cpu' in line_lower:
+                        log_message(f"🔍 Demucs: {line.strip()}")
+                    
+                    if "%|" in line:
+                        try:
+                            parts = line.split('%|')
+                            if len(parts) > 0:
+                                percent_part = parts[0].strip()
+                                p_match = re.search(r'(\d+)$', percent_part)
+                                if p_match:
+                                    track_percent = int(p_match.group(1))
+                                    current_status['progress'] = int(track_percent * 0.7)
+                                    # Update queue tracker with progress
+                                    update_queue_item(filename, progress=int(track_percent * 0.7), step=f'Séparation IA {track_percent}%{retry_label}')
+                        except:
+                            pass
+                
+                proc.wait()
+                return proc.returncode, output_lines
             
-            proc.wait()
-            return proc.returncode, output_lines
-        
-        # Try with detected device first
-        returncode, demucs_output = run_demucs_with_device(DEMUCS_DEVICE)
-        
-        # If GPU failed, fallback to CPU
-        if returncode != 0 and DEMUCS_DEVICE == 'cuda':
-            log_message(f"⚠️ GPU échoué, fallback vers CPU...")
-            returncode, demucs_output = run_demucs_with_device('cpu')
-        
-        if returncode != 0:
-            error_lines = ''.join(demucs_output[-10:])
-            log_message(f"❌ Erreur Demucs pour {filename}")
-            log_message(f"📋 Code retour: {returncode}")
-            log_message(f"📋 Détails: {error_lines[:500]}")
-            print(f"DEMUCS ERROR OUTPUT:\n{error_lines}")
-            return
-        
-        # 2. Generate edits (Main, Acapella, Instrumental)
-        current_status['current_step'] = "Génération des versions..."
-        current_status['progress'] = 70
-        update_queue_item(filename, progress=70, step='Export MP3/WAV...')
-        
-        clean_name, _ = clean_filename(filename)
-        track_output_dir = os.path.join(PROCESSED_FOLDER, clean_name)
-        os.makedirs(track_output_dir, exist_ok=True)
-        
-        # Get separated files
-        source_dir = os.path.join(OUTPUT_FOLDER, 'htdemucs', track_name)
-        inst_path = os.path.join(source_dir, 'no_vocals.mp3')
-        vocals_path = os.path.join(source_dir, 'vocals.mp3')
-        
-        if os.path.exists(inst_path) and os.path.exists(vocals_path):
-            update_queue_item(filename, progress=80, step='Création des versions...')
-            edits = create_edits(vocals_path, inst_path, filepath, track_output_dir, filename)
-            update_queue_item(filename, progress=100, step='Terminé')
+            # Try with detected device first
+            returncode, demucs_output = run_demucs_with_device(DEMUCS_DEVICE)
+            
+            # If GPU failed, fallback to CPU
+            if returncode != 0 and DEMUCS_DEVICE == 'cuda':
+                log_message(f"⚠️ GPU échoué, fallback vers CPU...")
+                returncode, demucs_output = run_demucs_with_device('cpu')
+            
+            if returncode != 0:
+                error_lines = ''.join(demucs_output[-10:])
+                error_msg = f"Erreur Demucs (code {returncode}): {error_lines[:200]}"
+                log_message(f"❌ {error_msg}", session_id)
+                print(f"DEMUCS ERROR OUTPUT:\n{error_lines}")
+                last_error = error_msg
+                
+                # Wait before retry
+                if attempt < max_attempts:
+                    log_message(f"⏳ Attente {RETRY_DELAY_SECONDS}s avant nouvelle tentative...", session_id)
+                    time.sleep(RETRY_DELAY_SECONDS)
+                continue  # Retry
+            
+            # 2. Generate edits (Main, Acapella, Instrumental)
+            current_status['current_step'] = f"Génération des versions...{retry_label}"
+            current_status['progress'] = 70
+            update_queue_item(filename, progress=70, step=f'Export MP3/WAV...{retry_label}')
+            
+            clean_name, _ = clean_filename(filename)
+            track_output_dir = os.path.join(PROCESSED_FOLDER, clean_name)
+            os.makedirs(track_output_dir, exist_ok=True)
+            
+            # Get separated files
+            source_dir = os.path.join(OUTPUT_FOLDER, 'htdemucs', track_name)
+            inst_path = os.path.join(source_dir, 'no_vocals.mp3')
+            vocals_path = os.path.join(source_dir, 'vocals.mp3')
+            
+            # Check if separated files exist with retry
+            files_found = False
+            for wait_attempt in range(5):
+                if os.path.exists(inst_path) and os.path.exists(vocals_path):
+                    files_found = True
+                    break
+                if wait_attempt < 4:
+                    log_message(f"⏳ Attente des fichiers séparés ({wait_attempt + 1}/5)...", session_id)
+                    time.sleep(2)
+            
+            if not files_found:
+                error_msg = f"Fichiers séparés non trouvés après Demucs: {source_dir}"
+                log_message(f"❌ {error_msg}", session_id)
+                last_error = error_msg
+                
+                if attempt < max_attempts:
+                    log_message(f"⏳ Attente {RETRY_DELAY_SECONDS}s avant nouvelle tentative...", session_id)
+                    time.sleep(RETRY_DELAY_SECONDS)
+                continue  # Retry
+            
+            # Try creating edits with error handling
+            update_queue_item(filename, progress=80, step=f'Création des versions...{retry_label}')
+            try:
+                edits = create_edits(vocals_path, inst_path, filepath, track_output_dir, filename)
+            except Exception as edit_error:
+                error_msg = f"Erreur création édits: {str(edit_error)}"
+                log_message(f"❌ {error_msg}", session_id)
+                last_error = error_msg
+                
+                if attempt < max_attempts:
+                    log_message(f"⏳ Attente {RETRY_DELAY_SECONDS}s avant nouvelle tentative...", session_id)
+                    time.sleep(RETRY_DELAY_SECONDS)
+                continue  # Retry
+            
+            update_queue_item(filename, progress=100, step='Terminé ✅')
             
             # Add to session-specific results
             current_status['results'].append({
                 'original': clean_name,
                 'edits': edits
             })
-            log_message(f"✅ [{session_id}] Terminé : {clean_name}", session_id)
-        else:
-            log_message(f"⚠️ Fichiers séparés non trouvés pour {filename}", session_id)
-        
-        current_status['progress'] = 100
+            
+            # Remove from failed files if it was there (successful retry)
+            remove_failed_file(session_id, filename)
+            
+            # Update retry count
+            current_status['retry_count'][filename] = attempt
+            
+            log_message(f"✅ [{session_id}] Terminé : {clean_name}" + (f" (après {attempt} tentative(s))" if attempt > 1 else ""), session_id)
+            
+            current_status['progress'] = 100
+            return True, None  # Success
 
-    except Exception as e:
-        log_message(f"❌ Erreur critique {filename}: {e}", session_id)
+        except Exception as e:
+            error_msg = f"Erreur critique: {str(e)}"
+            log_message(f"❌ {error_msg} pour {filename}", session_id)
+            import traceback
+            traceback.print_exc()
+            last_error = error_msg
+            
+            if attempt < max_attempts:
+                log_message(f"⏳ Attente {RETRY_DELAY_SECONDS}s avant nouvelle tentative...", session_id)
+                time.sleep(RETRY_DELAY_SECONDS)
+            continue  # Retry
+    
+    # All attempts failed
+    final_error = f"Échec après {max_attempts} tentatives. Dernière erreur: {last_error}"
+    log_message(f"❌ [{session_id}] ÉCHEC DÉFINITIF pour {filename}: {final_error}", session_id)
+    
+    # Track the failed file
+    add_failed_file(session_id, filename, final_error, filepath)
+    current_status['retry_count'][filename] = max_attempts
+    
+    # Update UI to show failure
+    update_queue_item(filename, status='failed', progress=0, step=f'❌ Échec: {last_error[:50]}...')
+    
+    return False, final_error
 
 @app.route('/clear_results', methods=['POST'])
 def clear_results():
@@ -1987,8 +2317,120 @@ def status():
     current_status['pending_downloads'] = get_pending_tracks_count()
     current_status['pending_warning'] = check_pending_tracks_warning()
     
+    # Ensure failed_files is included (for frontend display)
+    if 'failed_files' not in current_status:
+        current_status['failed_files'] = []
+    
     # Return session-specific status
     return jsonify(current_status)
+
+@app.route('/retry_failed', methods=['POST'])
+def retry_failed():
+    """
+    Retry processing failed files.
+    Can retry all failed files or specific ones by filename.
+    """
+    session_id = get_session_id()
+    current_status = get_job_status(session_id)
+    
+    data = request.json or {}
+    specific_files = data.get('filenames', [])  # Empty = retry all
+    
+    failed_files = current_status.get('failed_files', [])
+    
+    if not failed_files:
+        return jsonify({'message': 'Aucun fichier en échec à réessayer', 'retried': 0})
+    
+    retried_count = 0
+    retried_files = []
+    
+    for failed in list(failed_files):  # Use list() to avoid modifying while iterating
+        filename = failed['filename']
+        
+        # If specific files requested, only retry those
+        if specific_files and filename not in specific_files:
+            continue
+        
+        # Reset retry count for fresh retry
+        current_status['retry_count'][filename] = 0
+        
+        # Remove from failed list (will be re-added if still fails)
+        remove_failed_file(session_id, filename)
+        
+        # Add back to queue as retry
+        add_to_queue_tracker(filename, session_id)
+        track_queue.put({
+            'filename': filename,
+            'session_id': session_id,
+            'is_retry': True
+        })
+        
+        retried_count += 1
+        retried_files.append(filename)
+        log_message(f"🔄 [{session_id}] Réessai ajouté à la file: {filename}", session_id)
+    
+    return jsonify({
+        'message': f'{retried_count} fichier(s) ajouté(s) à la file pour réessai',
+        'retried': retried_count,
+        'filenames': retried_files,
+        'queue_size': track_queue.qsize()
+    })
+
+@app.route('/clear_failed', methods=['POST'])
+def clear_failed():
+    """
+    Clear the failed files list without retrying.
+    Use this to acknowledge failures and clear them from the UI.
+    """
+    session_id = get_session_id()
+    current_status = get_job_status(session_id)
+    
+    data = request.json or {}
+    specific_files = data.get('filenames', [])  # Empty = clear all
+    
+    failed_files = current_status.get('failed_files', [])
+    
+    if not failed_files:
+        return jsonify({'message': 'Aucun fichier en échec à effacer', 'cleared': 0})
+    
+    cleared_count = 0
+    
+    if specific_files:
+        # Clear only specific files
+        for filename in specific_files:
+            remove_failed_file(session_id, filename)
+            remove_from_queue_tracker(filename)
+            cleared_count += 1
+    else:
+        # Clear all failed files
+        cleared_count = len(failed_files)
+        current_status['failed_files'] = []
+        # Also remove from queue tracker
+        for failed in failed_files:
+            remove_from_queue_tracker(failed['filename'])
+    
+    log_message(f"🗑️ [{session_id}] {cleared_count} fichier(s) en échec effacé(s)", session_id)
+    
+    return jsonify({
+        'message': f'{cleared_count} fichier(s) effacé(s)',
+        'cleared': cleared_count
+    })
+
+@app.route('/failed_files')
+def get_failed_files():
+    """
+    Get the list of failed files for the current session.
+    """
+    session_id = request.args.get('session_id') or get_session_id()
+    current_status = get_job_status(session_id)
+    
+    failed_files = current_status.get('failed_files', [])
+    
+    return jsonify({
+        'failed_files': failed_files,
+        'count': len(failed_files),
+        'session_id': session_id
+    })
 
 @app.route('/system_stats')
 def system_stats():
@@ -2149,10 +2591,36 @@ def download_file():
     response.headers['Access-Control-Allow-Origin'] = '*'
     response.headers['Access-Control-Expose-Headers'] = 'Content-Disposition'
     
-    # Log the download - file is NOT deleted here
-    # Files stay available until track.idbyrivoli.com confirms via /confirm_download
+    # Log the download
     if track_name:
         log_file_download(track_name, filepath)
+    
+    # DELETE FILE AFTER DOWNLOAD if enabled (to prevent disk filling up)
+    if DELETE_AFTER_DOWNLOAD:
+        try:
+            # Delete the specific file that was downloaded
+            os.unlink(filepath)
+            print(f"   🗑️ Deleted after download: {filepath}")
+            
+            # Check if the track folder is now empty, if so delete it too
+            if track_name:
+                track_folder = os.path.join(PROCESSED_FOLDER, track_name)
+                if os.path.exists(track_folder) and os.path.isdir(track_folder):
+                    remaining_files = os.listdir(track_folder)
+                    if len(remaining_files) == 0:
+                        shutil.rmtree(track_folder)
+                        print(f"   🗑️ Deleted empty folder: {track_folder}")
+                        
+                        # Also clean up htdemucs intermediate files
+                        htdemucs_folder = os.path.join(OUTPUT_FOLDER, 'htdemucs', track_name)
+                        if os.path.exists(htdemucs_folder):
+                            shutil.rmtree(htdemucs_folder)
+                            print(f"   🗑️ Deleted htdemucs folder: {htdemucs_folder}")
+                        
+                        # Remove from pending downloads
+                        confirm_track_download(track_name)
+        except Exception as e:
+            print(f"   ⚠️ Could not delete after download: {e}")
     
     return response
 
