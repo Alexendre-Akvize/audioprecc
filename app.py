@@ -6,7 +6,9 @@ import time
 import re
 import zipfile
 import io
-from flask import Flask, render_template, request, jsonify, send_from_directory, abort, send_file, session
+import csv
+from datetime import datetime
+from flask import Flask, render_template, request, jsonify, send_from_directory, abort, send_file, session, Response
 from mutagen.mp3 import MP3
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3, TIT2, TPE1, APIC, TALB, TDRC, TRCK, TCON, TBPM, TSRC, TLEN, TPUB, WOAR, WXXX, TXXX
@@ -182,6 +184,105 @@ def get_pending_tracks_list():
         return tracks
 
 print("📥 Pending downloads system initialized (files stay until API confirms download)")
+
+# =============================================================================
+# UPLOAD HISTORY TRACKING - CSV Export feature
+# =============================================================================
+# Structure: { "filename": {"status": str, "date": str, "type": str, "session_id": str, "error": str|None} }
+upload_history = {}
+upload_history_lock = Lock()
+HISTORY_FILE = os.path.join(BASE_DIR, 'upload_history.csv')
+
+def detect_track_type_from_title(title):
+    """
+    Detect if track title contains Instrumental, Extended, or Acapella.
+    Returns the detected type or None if regular track.
+    Case-insensitive matching.
+    """
+    if not title:
+        return None
+    
+    title_lower = title.lower()
+    
+    # Check for specific keywords
+    if 'instrumental' in title_lower:
+        return 'Instrumental'
+    elif 'acapella' in title_lower or 'a capella' in title_lower or 'acappella' in title_lower:
+        return 'Acapella'
+    elif 'extended' in title_lower:
+        return 'Extended'
+    
+    return None
+
+def add_to_upload_history(filename, session_id, status='uploaded', track_type='Unknown', error=None):
+    """Add or update a file in the upload history."""
+    with upload_history_lock:
+        upload_history[filename] = {
+            'filename': filename,
+            'status': status,
+            'date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'type': track_type,
+            'session_id': session_id,
+            'error': error
+        }
+        # Save to CSV file for persistence
+        save_history_to_csv()
+
+def update_upload_history_status(filename, status, track_type=None, error=None):
+    """Update the status of a file in the upload history."""
+    with upload_history_lock:
+        if filename in upload_history:
+            upload_history[filename]['status'] = status
+            upload_history[filename]['date'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            if track_type:
+                upload_history[filename]['type'] = track_type
+            if error:
+                upload_history[filename]['error'] = error
+            save_history_to_csv()
+
+def save_history_to_csv():
+    """Save upload history to CSV file (called within lock)."""
+    try:
+        with open(HISTORY_FILE, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=['filename', 'status', 'date', 'type', 'session_id', 'error'])
+            writer.writeheader()
+            for entry in upload_history.values():
+                writer.writerow(entry)
+    except Exception as e:
+        print(f"⚠️ Could not save history to CSV: {e}")
+
+def load_history_from_csv():
+    """Load upload history from CSV file on startup."""
+    global upload_history
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    upload_history[row['filename']] = row
+            print(f"📋 Loaded {len(upload_history)} entries from upload history")
+        except Exception as e:
+            print(f"⚠️ Could not load history from CSV: {e}")
+
+def get_upload_history_list():
+    """Get the upload history as a sorted list (newest first)."""
+    with upload_history_lock:
+        entries = list(upload_history.values())
+        # Sort by date descending
+        entries.sort(key=lambda x: x['date'], reverse=True)
+        return entries
+
+def clear_upload_history():
+    """Clear all upload history."""
+    global upload_history
+    with upload_history_lock:
+        upload_history = {}
+        if os.path.exists(HISTORY_FILE):
+            os.remove(HISTORY_FILE)
+
+# Load history on startup
+load_history_from_csv()
+print(f"📋 Upload history system initialized ({len(upload_history)} entries)")
 
 def log_file_download(track_name, filepath):
     """
@@ -1845,6 +1946,160 @@ print(f"")
 MAX_RETRY_ATTEMPTS = int(os.environ.get('MAX_RETRY_ATTEMPTS', 3))
 RETRY_DELAY_SECONDS = int(os.environ.get('RETRY_DELAY_SECONDS', 5))
 
+def process_track_without_separation(filepath, filename, track_type, session_id='global', worker_id=None):
+    """
+    Process a track WITHOUT running Demucs separation.
+    Used for tracks with Instrumental/Extended/Acapella in the title.
+    Exports only the Main version with the detected type as suffix.
+    
+    Returns: (success: bool, error_message: str or None)
+    """
+    current_status = get_job_status(session_id)
+    
+    try:
+        current_status['state'] = 'processing'
+        current_status['current_filename'] = filename
+        current_status['current_step'] = f"Export direct ({track_type})..."
+        
+        log_message(f"⏭️ [{session_id}] Skip Demucs pour: {filename} (Type détecté: {track_type})", session_id)
+        update_queue_item(filename, status='processing', worker=worker_id, progress=10, step=f'Export direct ({track_type})...')
+        
+        # Get original title from metadata
+        try:
+            original_audio = MP3(filepath, ID3=ID3)
+            original_tags = original_audio.tags
+            original_title = None
+            if original_tags and 'TIT2' in original_tags:
+                original_title = str(original_tags['TIT2'].text[0]) if original_tags['TIT2'].text else None
+        except:
+            original_tags = None
+            original_title = None
+        
+        # Determine base name
+        fallback_name, _ = clean_filename(filename)
+        if original_title:
+            metadata_base_name = original_title
+            metadata_base_name = re.sub(r'[<>:"/\\|?*]', '', metadata_base_name)
+            metadata_base_name = metadata_base_name.strip()
+        else:
+            metadata_base_name = fallback_name
+        
+        # Get BPM from original metadata
+        bpm = None
+        try:
+            if original_tags and 'TBPM' in original_tags:
+                bpm_text = str(original_tags['TBPM'].text[0]).strip()
+                if bpm_text:
+                    bpm = int(float(bpm_text))
+        except:
+            pass
+        
+        # Create output directory
+        track_output_dir = os.path.join(PROCESSED_FOLDER, metadata_base_name)
+        os.makedirs(track_output_dir, exist_ok=True)
+        
+        update_queue_item(filename, progress=30, step='Chargement audio...')
+        
+        # Load original audio
+        original = AudioSegment.from_mp3(filepath)
+        
+        update_queue_item(filename, progress=50, step='Export MP3/WAV...')
+        
+        # Export with the detected type as suffix
+        suffix = track_type
+        out_name_mp3 = f"{metadata_base_name} - {suffix}.mp3"
+        out_name_wav = f"{metadata_base_name} - {suffix}.wav"
+        
+        out_path_mp3 = os.path.join(track_output_dir, out_name_mp3)
+        out_path_wav = os.path.join(track_output_dir, out_name_wav)
+        
+        metadata_title = f"{metadata_base_name} - {suffix}"
+        
+        # Export both formats
+        from concurrent.futures import ThreadPoolExecutor
+        
+        def export_mp3():
+            original.export(out_path_mp3, format="mp3", bitrate="320k")
+            update_metadata(out_path_mp3, "ID By Rivoli", metadata_title, filepath, bpm)
+        
+        def export_wav():
+            original.export(out_path_wav, format="wav")
+            update_metadata_wav(out_path_wav, "ID By Rivoli", metadata_title, filepath, bpm)
+        
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(export_mp3), executor.submit(export_wav)]
+            for f in futures:
+                f.result()
+        
+        update_queue_item(filename, progress=80, step='Envoi API...')
+        
+        # Build URLs
+        rel_path_mp3 = f"{metadata_base_name}/{out_name_mp3}"
+        rel_path_wav = f"{metadata_base_name}/{out_name_wav}"
+        
+        mp3_url = f"/download_file?path={urllib.parse.quote(rel_path_mp3, safe='/')}"
+        wav_url = f"/download_file?path={urllib.parse.quote(rel_path_wav, safe='/')}"
+        
+        # Log URLs
+        base_url = CURRENT_HOST_URL if CURRENT_HOST_URL else "http://localhost:8888"
+        log_message(f"📥 URL MP3: {base_url}{mp3_url}")
+        log_message(f"📥 URL WAV: {base_url}{wav_url}")
+        
+        # Prepare and send track info to API
+        track_info_mp3 = {
+            'type': suffix,
+            'format': 'MP3',
+            'name': metadata_title,
+            'url': mp3_url
+        }
+        track_data_mp3 = prepare_track_metadata(track_info_mp3, filepath, bpm)
+        if track_data_mp3:
+            send_track_info_to_api(track_data_mp3)
+        
+        track_info_wav = {
+            'type': suffix,
+            'format': 'WAV',
+            'name': metadata_title,
+            'url': wav_url
+        }
+        track_data_wav = prepare_track_metadata(track_info_wav, filepath, bpm)
+        if track_data_wav:
+            send_track_info_to_api(track_data_wav)
+        
+        # Build edit result
+        edit = {
+            'name': metadata_title,
+            'mp3': mp3_url,
+            'wav': wav_url
+        }
+        
+        # Register for pending download
+        track_file_for_pending_download(metadata_base_name, filepath, 2)  # 2 files (MP3 + WAV)
+        
+        update_queue_item(filename, progress=100, step=f'Terminé ({track_type}) ✅')
+        
+        # Add to session results
+        current_status['results'].append({
+            'original': metadata_base_name,
+            'edits': [edit]
+        })
+        
+        # Update upload history
+        update_upload_history_status(filename, 'completed', track_type=track_type)
+        
+        log_message(f"✅ [{session_id}] Export direct terminé: {metadata_base_name} ({track_type})", session_id)
+        
+        current_status['progress'] = 100
+        return True, None
+        
+    except Exception as e:
+        error_msg = f"Erreur export direct: {str(e)}"
+        log_message(f"❌ {error_msg} pour {filename}", session_id)
+        import traceback
+        traceback.print_exc()
+        update_upload_history_status(filename, 'failed', error=error_msg)
+        return False, error_msg
+
 def add_failed_file(session_id, filename, error_message, filepath=None):
     """Add a file to the failed files list for a session."""
     current_status = get_job_status(session_id)
@@ -1884,6 +2139,48 @@ def process_single_track(filepath, filename, session_id='global', worker_id=None
     # Track retry attempts
     if filename not in current_status['retry_count']:
         current_status['retry_count'][filename] = 0
+    
+    # =============================================================================
+    # CHECK FOR SKIP-ANALYSIS TRACK TYPES (Instrumental/Extended/Acapella)
+    # =============================================================================
+    try:
+        original_audio = MP3(filepath, ID3=ID3)
+        original_tags = original_audio.tags
+        title_for_detection = None
+        
+        # Try to get title from metadata
+        if original_tags and 'TIT2' in original_tags:
+            title_for_detection = str(original_tags['TIT2'].text[0]) if original_tags['TIT2'].text else None
+        
+        # Fallback to filename if no title in metadata
+        if not title_for_detection:
+            title_for_detection = filename
+        
+        # Check if track type can be detected from title
+        detected_type = detect_track_type_from_title(title_for_detection)
+        
+        if detected_type:
+            log_message(f"⏭️ [{session_id}] Type détecté dans le titre: '{detected_type}' → Skip Demucs", session_id)
+            # Add to upload history with detected type
+            add_to_upload_history(filename, session_id, 'processing', detected_type)
+            
+            # Process without Demucs separation
+            success, error = process_track_without_separation(filepath, filename, detected_type, session_id, worker_id)
+            
+            if success:
+                remove_failed_file(session_id, filename)
+            else:
+                add_failed_file(session_id, filename, error, filepath)
+                update_queue_item(filename, status='failed', progress=0, step=f'❌ {error[:50]}...')
+            
+            return success, error
+            
+    except Exception as e:
+        log_message(f"⚠️ Erreur détection type: {e} - Traitement normal", session_id)
+    
+    # =============================================================================
+    # NORMAL PROCESSING WITH DEMUCS
+    # =============================================================================
     
     # Ensure CUDA is available (re-check in case it wasn't ready at startup)
     device = ensure_cuda_device()
@@ -2075,6 +2372,9 @@ def process_single_track(filepath, filename, session_id='global', worker_id=None
             # Update retry count
             current_status['retry_count'][filename] = attempt
             
+            # Update upload history with completed status
+            update_upload_history_status(filename, 'completed', track_type='Full Analysis')
+            
             log_message(f"✅ [{session_id}] Terminé : {clean_name}" + (f" (après {attempt} tentative(s))" if attempt > 1 else ""), session_id)
             
             current_status['progress'] = 100
@@ -2099,6 +2399,9 @@ def process_single_track(filepath, filename, session_id='global', worker_id=None
     # Track the failed file
     add_failed_file(session_id, filename, final_error, filepath)
     current_status['retry_count'][filename] = max_attempts
+    
+    # Update upload history with failed status
+    update_upload_history_status(filename, 'failed', error=final_error)
     
     # Update UI to show failure
     update_queue_item(filename, status='failed', progress=0, step=f'❌ Échec: {last_error[:50]}...')
@@ -2160,6 +2463,9 @@ def enqueue_file():
         
         # Add to queue tracker for UI display
         add_to_queue_tracker(filename, session_id)
+        
+        # Update upload history status to 'processing'
+        update_upload_history_status(filename, 'processing')
         
         # Queue item includes session_id for multi-user support
         track_queue.put({'filename': filename, 'session_id': session_id})
@@ -2232,6 +2538,10 @@ def upload_chunk():
             try:
                 file.save(filepath)
                 print(f"✅ Saved: {safe_filename} ({os.path.getsize(filepath)} bytes)")
+                
+                # Add to upload history
+                add_to_upload_history(safe_filename, session_id, 'uploaded', 'Pending')
+                
             except Exception as save_error:
                 print(f"❌ Save error for {safe_filename}: {save_error}")
                 import traceback
@@ -2739,6 +3049,61 @@ def list_files():
             result[subdir] = os.listdir(subdir_path)
     return jsonify(result)
 
+# =============================================================================
+# UPLOAD HISTORY ROUTES
+# =============================================================================
+
+@app.route('/history')
+def get_history():
+    """Get the upload history as JSON."""
+    history = get_upload_history_list()
+    
+    # Calculate stats
+    total = len(history)
+    completed = sum(1 for h in history if h['status'] == 'completed')
+    failed = sum(1 for h in history if h['status'] == 'failed')
+    pending = sum(1 for h in history if h['status'] in ['uploaded', 'processing'])
+    
+    return jsonify({
+        'history': history,
+        'stats': {
+            'total': total,
+            'completed': completed,
+            'failed': failed,
+            'pending': pending
+        }
+    })
+
+@app.route('/history/csv')
+def download_history_csv():
+    """Download the upload history as a CSV file."""
+    history = get_upload_history_list()
+    
+    # Create CSV in memory
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=['filename', 'status', 'date', 'type', 'session_id', 'error'])
+    writer.writeheader()
+    
+    for entry in history:
+        writer.writerow(entry)
+    
+    # Create response
+    output.seek(0)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    
+    return Response(
+        output.getvalue(),
+        mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename=upload_history_{timestamp}.csv'}
+    )
+
+@app.route('/history/clear', methods=['POST'])
+def clear_history():
+    """Clear the upload history."""
+    clear_upload_history()
+    log_message("🗑️ Upload history cleared")
+    return jsonify({'message': 'History cleared'})
+
 # Debug route to check detected public URL
 @app.route('/debug_url')
 def debug_url():
@@ -2853,7 +3218,7 @@ def cleanup_files():
     Deletes all files in uploads, output, and processed directories to free up disk space.
     Also clears all in-memory state to start fresh.
     """
-    global job_status, processed_history
+    global job_status, upload_history
     
     try:
         # Clear directories

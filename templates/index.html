@@ -1016,6 +1016,181 @@
             z-index: 1000;
         }
 
+        /* History Modal */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .modal-overlay.show {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .modal {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            width: 90%;
+            max-width: 900px;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            transform: scale(0.95);
+            transition: transform 0.3s ease;
+        }
+
+        .modal-overlay.show .modal {
+            transform: scale(1);
+        }
+
+        .modal-header {
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-title {
+            font-size: 16px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .modal-body {
+            padding: 24px;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .modal-footer {
+            padding: 16px 24px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .history-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        .history-table th,
+        .history-table td {
+            padding: 10px 12px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .history-table th {
+            font-weight: 500;
+            color: var(--text-muted);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .history-table td {
+            color: var(--text-secondary);
+        }
+
+        .history-table tr:hover td {
+            background: var(--bg-tertiary);
+        }
+
+        .history-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: 100px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        .history-status.completed {
+            background: rgba(34, 197, 94, 0.15);
+            color: var(--success);
+        }
+
+        .history-status.failed {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--error);
+        }
+
+        .history-status.uploaded,
+        .history-status.processing {
+            background: rgba(245, 158, 11, 0.15);
+            color: var(--warning);
+        }
+
+        .history-stats {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+
+        .history-stat {
+            padding: 12px 16px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            text-align: center;
+        }
+
+        .history-stat-value {
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .history-stat-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+
+        .history-type {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            background: var(--bg-tertiary);
+            color: var(--text-muted);
+        }
+
+        .history-type.instrumental {
+            background: rgba(139, 92, 246, 0.15);
+            color: #a78bfa;
+        }
+
+        .history-type.acapella {
+            background: rgba(236, 72, 153, 0.15);
+            color: #f472b6;
+        }
+
+        .history-type.extended {
+            background: rgba(59, 130, 246, 0.15);
+            color: #60a5fa;
+        }
+
+        .history-empty {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-muted);
+        }
+
         .toast.show {
             transform: translateY(0);
             opacity: 1;
@@ -1050,6 +1225,10 @@
                 </div>
             </div>
             <div class="stats-bar" id="statsBar">
+                <button class="btn btn-secondary" onclick="openHistoryModal()" style="padding: 8px 14px;">
+                    <i data-lucide="history"></i>
+                    History
+                </button>
                 <div class="stat-chip">
                     <i data-lucide="cpu"></i>
                     <span class="stat-value" id="cpuValue">--</span>
@@ -1274,7 +1453,72 @@
     <div class="toast" id="toast">
         <i data-lucide="check-circle"></i>
         <span id="toastMessage">Success</span>
+    </div>
+
+    <!-- History Modal -->
+    <div class="modal-overlay" id="historyModal">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <i data-lucide="history"></i>
+                    Upload History
+                </div>
+                <button class="btn btn-ghost" onclick="closeHistoryModal()">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="history-stats" id="historyStats">
+                    <div class="history-stat">
+                        <div class="history-stat-value" id="historyTotal">0</div>
+                        <div class="history-stat-label">Total</div>
+                    </div>
+                    <div class="history-stat">
+                        <div class="history-stat-value" style="color: var(--success);" id="historyCompleted">0</div>
+                        <div class="history-stat-label">Completed</div>
+                    </div>
+                    <div class="history-stat">
+                        <div class="history-stat-value" style="color: var(--error);" id="historyFailed">0</div>
+                        <div class="history-stat-label">Failed</div>
+                    </div>
+                    <div class="history-stat">
+                        <div class="history-stat-value" style="color: var(--warning);" id="historyPending">0</div>
+                        <div class="history-stat-label">Pending</div>
+                    </div>
+                </div>
+                <div id="historyTableContainer">
+                    <table class="history-table">
+                        <thead>
+                            <tr>
+                                <th>Filename</th>
+                                <th>Status</th>
+                                <th>Type</th>
+                                <th>Date</th>
+                            </tr>
+                        </thead>
+                        <tbody id="historyTableBody">
+                            <tr><td colspan="4" class="history-empty">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <div style="display: flex; gap: 8px;">
+                    <a href="/history/csv" class="btn btn-secondary" download>
+                        <i data-lucide="download"></i>
+                        Download CSV
+                    </a>
+                    <button class="btn btn-ghost" onclick="clearHistory()">
+                        <i data-lucide="trash-2"></i>
+                        Clear History
+                    </button>
+                </div>
+                <button class="btn btn-primary" onclick="closeHistoryModal()">
+                    Close
+                </button>
+            </div>
         </div>
+    </div>
 
     <script>
         // Initialize Lucide icons
@@ -2325,6 +2569,122 @@
         // Start polling on page load for multi-user visibility
         startPolling();
         startStatsPolling();
+
+        // ===== HISTORY MODAL FUNCTIONS =====
+        
+        function openHistoryModal() {
+            document.getElementById('historyModal').classList.add('show');
+            loadHistory();
+        }
+
+        function closeHistoryModal() {
+            document.getElementById('historyModal').classList.remove('show');
+        }
+
+        // Close modal on escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeHistoryModal();
+            }
+        });
+
+        // Close modal on overlay click
+        document.getElementById('historyModal').addEventListener('click', (e) => {
+            if (e.target.id === 'historyModal') {
+                closeHistoryModal();
+            }
+        });
+
+        async function loadHistory() {
+            try {
+                const response = await fetch('/history');
+                const data = await response.json();
+                
+                // Update stats
+                document.getElementById('historyTotal').textContent = data.stats.total;
+                document.getElementById('historyCompleted').textContent = data.stats.completed;
+                document.getElementById('historyFailed').textContent = data.stats.failed;
+                document.getElementById('historyPending').textContent = data.stats.pending;
+                
+                // Update table
+                const tbody = document.getElementById('historyTableBody');
+                
+                if (data.history.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" class="history-empty">No upload history yet</td></tr>';
+                    return;
+                }
+                
+                tbody.innerHTML = data.history.map(entry => {
+                    const statusClass = entry.status.toLowerCase();
+                    const typeClass = getTypeClass(entry.type);
+                    const errorTooltip = entry.error ? `title="${escapeHtml(entry.error)}"` : '';
+                    
+                    return `
+                        <tr>
+                            <td style="max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(entry.filename)}">
+                                ${escapeHtml(entry.filename)}
+                            </td>
+                            <td>
+                                <span class="history-status ${statusClass}" ${errorTooltip}>
+                                    ${getStatusIcon(entry.status)}
+                                    ${entry.status}
+                                </span>
+                            </td>
+                            <td>
+                                <span class="history-type ${typeClass}">
+                                    ${escapeHtml(entry.type || 'Unknown')}
+                                </span>
+                            </td>
+                            <td style="color: var(--text-muted); font-size: 12px;">
+                                ${escapeHtml(entry.date)}
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+                
+            } catch (error) {
+                console.error('Error loading history:', error);
+                document.getElementById('historyTableBody').innerHTML = 
+                    '<tr><td colspan="4" class="history-empty">Error loading history</td></tr>';
+            }
+        }
+
+        function getStatusIcon(status) {
+            switch (status.toLowerCase()) {
+                case 'completed':
+                    return '<i data-lucide="check-circle" style="width:12px;height:12px;"></i>';
+                case 'failed':
+                    return '<i data-lucide="x-circle" style="width:12px;height:12px;"></i>';
+                case 'processing':
+                    return '<i data-lucide="loader-2" style="width:12px;height:12px;" class="spin"></i>';
+                default:
+                    return '<i data-lucide="clock" style="width:12px;height:12px;"></i>';
+            }
+        }
+
+        function getTypeClass(type) {
+            if (!type) return '';
+            const typeLower = type.toLowerCase();
+            if (typeLower.includes('instrumental')) return 'instrumental';
+            if (typeLower.includes('acapella')) return 'acapella';
+            if (typeLower.includes('extended')) return 'extended';
+            return '';
+        }
+
+        async function clearHistory() {
+            if (!confirm('Are you sure you want to clear all upload history?')) {
+                return;
+            }
+            
+            try {
+                await fetch('/history/clear', { method: 'POST' });
+                showToast('History cleared');
+                loadHistory();
+            } catch (error) {
+                console.error('Error clearing history:', error);
+                showToast('Error clearing history');
+            }
+        }
     </script>
 </body>
 </html>
