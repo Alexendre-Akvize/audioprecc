@@ -566,6 +566,16 @@
             color: var(--success);
         }
 
+        .status-badge.skipped {
+            background: rgba(161, 161, 170, 0.1);
+            color: var(--text-muted);
+        }
+
+        .status-badge.failed {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--error);
+        }
+
         /* Full Track List */
         .full-track-list {
             display: flex;
@@ -691,6 +701,11 @@
             color: var(--error);
         }
 
+        .track-list-item-status.skipped {
+            background: rgba(161, 161, 170, 0.1);
+            color: var(--text-muted);
+        }
+
         .track-checkbox.failed {
             border-color: var(--error);
             background: rgba(239, 68, 68, 0.1);
@@ -698,6 +713,16 @@
 
         .track-checkbox.failed svg {
             color: var(--error);
+            opacity: 1;
+        }
+
+        .track-checkbox.skipped {
+            border-color: var(--text-muted);
+            background: rgba(161, 161, 170, 0.1);
+        }
+
+        .track-checkbox.skipped svg {
+            color: var(--text-muted);
             opacity: 1;
         }
 
@@ -1390,6 +1415,10 @@
                                 <i data-lucide="alert-circle"></i>
                                 <span id="failedCount">0</span> failed
                                 <button onclick="retryFailedFiles()" style="margin-left: 8px; padding: 2px 8px; background: var(--error); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px;">Retry</button>
+                            </div>
+                            <div class="status-badge skipped" id="skippedBadge" style="display: none;">
+                                <i data-lucide="skip-forward"></i>
+                                <span id="skippedCount">0</span> skipped
                             </div>
                         </div>
                         
@@ -2326,7 +2355,7 @@
             document.getElementById('totalTrackCount').textContent = entries.length;
             
             // Calculate status counts (include 'uploaded' as uploading for display)
-            const counts = { selected: 0, uploading: 0, uploaded: 0, waiting: 0, processing: 0, completed: 0, failed: 0 };
+            const counts = { selected: 0, uploading: 0, uploaded: 0, waiting: 0, processing: 0, completed: 0, failed: 0, skipped: 0 };
             entries.forEach(([_, info]) => {
                 if (counts[info.status] !== undefined) counts[info.status]++;
             });
@@ -2337,6 +2366,7 @@
             const waitingBadge = document.getElementById('waitingBadge');
             const completedBadge = document.getElementById('completedBadge');
             const failedBadge = document.getElementById('failedBadge');
+            const skippedBadge = document.getElementById('skippedBadge');
             
             const uploadingTotal = counts.selected + counts.uploading + counts.uploaded;
             uploadingBadge.style.display = uploadingTotal > 0 ? 'inline-flex' : 'none';
@@ -2354,6 +2384,9 @@
             failedBadge.style.display = counts.failed > 0 ? 'inline-flex' : 'none';
             document.getElementById('failedCount').textContent = counts.failed;
             
+            skippedBadge.style.display = counts.skipped > 0 ? 'inline-flex' : 'none';
+            document.getElementById('skippedCount').textContent = counts.skipped;
+            
             // Empty state
             if (entries.length === 0) {
                 container.innerHTML = '<div class="queue-empty">No tracks yet</div>';
@@ -2368,7 +2401,8 @@
                 selected: [],
                 waiting: [],
                 completed: [],
-                failed: []
+                failed: [],
+                skipped: []
             };
             
             entries.forEach(([filename, info]) => {
@@ -2436,6 +2470,17 @@
                 }
             }
             
+            // Skipped tracks (already processed)
+            if (groups.skipped.length > 0) {
+                html += `<div class="track-list-section-header" style="color: var(--text-muted);">Skipped - Already Processed (${groups.skipped.length})</div>`;
+                groups.skipped.slice(0, MAX_DISPLAY_PER_SECTION).forEach(track => {
+                    html += renderTrackItem(track);
+                });
+                if (groups.skipped.length > MAX_DISPLAY_PER_SECTION) {
+                    html += `<div class="track-list-item" style="justify-content:center;color:var(--text-muted);">+${groups.skipped.length - MAX_DISPLAY_PER_SECTION} more skipped...</div>`;
+                }
+            }
+            
             container.innerHTML = html;
             lucide.createIcons();
         }
@@ -2480,6 +2525,11 @@
                     checkboxIcon = '<i data-lucide="alert-circle"></i>';
                     checkboxClass = 'failed';
                     statusLabel = track.error ? track.error.substring(0, 30) + '...' : 'Failed';
+                    break;
+                case 'skipped':
+                    checkboxIcon = '<i data-lucide="skip-forward"></i>';
+                    checkboxClass = 'skipped';
+                    statusLabel = 'Skipped';
                     break;
             }
             
