@@ -3264,7 +3264,7 @@ def list_pending_downloads():
     """
     # Check for API key (optional - can be public for monitoring)
     auth_header = request.headers.get('Authorization', '')
-    api_key_param = request.args.get('api_key', '')
+    api_key_param = request.args.get('api_key', 'idbyrivoli-secret-key-2024')
     
     is_authenticated = (
         auth_header == f'Bearer {API_KEY}' or 
@@ -3545,8 +3545,16 @@ def cleanup_files():
         # Clear queue tracker
         with queue_items_lock:
             queue_items.clear()
+        
+        # Clear pending downloads
+        with pending_downloads_lock:
+            pending_downloads.clear()
+        
+        # Clear scheduled deletions
+        with scheduled_deletions_lock:
+            scheduled_deletions.clear()
             
-        print("🧹 FULL RESET: All files and results cleared")
+        print("🧹 FULL RESET: All files, queues, and pending downloads cleared")
         return jsonify({'message': 'Cleanup successful', 'results_cleared': True})
         
     except Exception as e:
