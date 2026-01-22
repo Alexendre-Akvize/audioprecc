@@ -58,6 +58,12 @@ download_tracker_lock = Lock()
 pending_downloads = {}
 pending_downloads_lock = Lock()
 
+# Scheduled deletions - tracks confirmed for download, waiting 5 minutes before deletion
+# Structure: { "Track Name": {"scheduled_at": timestamp, "delete_after": timestamp} }
+scheduled_deletions = {}
+scheduled_deletions_lock = Lock()
+DELETION_DELAY_MINUTES = int(os.environ.get('DELETION_DELAY_MINUTES', 5))  # 5 minutes delay after confirm_download
+
 # Maximum number of pending tracks before warning (configurable)
 # Set high to support batch uploads of 1000+ tracks
 MAX_PENDING_TRACKS = int(os.environ.get('MAX_PENDING_TRACKS', 1500))
@@ -116,54 +122,140 @@ def track_file_for_pending_download(track_name, original_path, num_files=6):
             print(f"📝 ⚠️ WARNING: {pending_count} tracks pending (threshold: {PENDING_WARNING_THRESHOLD})")
         print(f"📝 ════════════════════════════════════════════════")
 
-def confirm_track_download(track_name):
+def schedule_track_deletion(track_name):
     """
+    Schedule a track for deletion after DELETION_DELAY_MINUTES.
     Called when track.idbyrivoli.com confirms successful download.
-    Deletes all files associated with this track.
-    Returns True if track was found and deleted, False otherwise.
+    Returns True if track was found and scheduled, False otherwise.
     """
     with pending_downloads_lock:
         if track_name not in pending_downloads:
             print(f"⚠️ Track '{track_name}' not found in pending downloads")
             return False
         
-        track_info = pending_downloads[track_name]
-        print(f"")
-        print(f"✅ ════════════════════════════════════════════════")
-        print(f"✅ CONFIRMED DOWNLOAD: '{track_name}'")
-        print(f"✅ Cleaning up files...")
-        
-        # Delete processed folder
-        if track_info.get('processed_dir') and os.path.exists(track_info['processed_dir']):
-            try:
-                shutil.rmtree(track_info['processed_dir'])
-                print(f"   🗑️ Deleted processed folder: {track_info['processed_dir']}")
-            except Exception as e:
-                print(f"   ⚠️ Could not delete processed folder: {e}")
-        
-        # Delete original upload file
-        if track_info.get('original_path') and os.path.exists(track_info['original_path']):
-            try:
-                os.remove(track_info['original_path'])
-                print(f"   🗑️ Deleted original: {track_info['original_path']}")
-            except Exception as e:
-                print(f"   ⚠️ Could not delete original: {e}")
-        
-        # Delete htdemucs intermediate folder
-        if track_info.get('htdemucs_dir') and os.path.exists(track_info['htdemucs_dir']):
-            try:
-                shutil.rmtree(track_info['htdemucs_dir'])
-                print(f"   🗑️ Deleted htdemucs folder: {track_info['htdemucs_dir']}")
-            except Exception as e:
-                print(f"   ⚠️ Could not delete htdemucs folder: {e}")
-        
-        # Remove from pending downloads
-        del pending_downloads[track_name]
-        print(f"   ✅ Cleanup complete for '{track_name}'")
-        print(f"   📊 Remaining pending tracks: {len(pending_downloads)}")
-        print(f"✅ ════════════════════════════════════════════════")
-        
-        return True
+        track_info = pending_downloads[track_name].copy()
+    
+    # Schedule for deletion
+    now = time.time()
+    delete_after = now + (DELETION_DELAY_MINUTES * 60)
+    
+    with scheduled_deletions_lock:
+        scheduled_deletions[track_name] = {
+            'scheduled_at': now,
+            'delete_after': delete_after,
+            'track_info': track_info
+        }
+    
+    # Remove from pending downloads (it's now scheduled for deletion)
+    with pending_downloads_lock:
+        if track_name in pending_downloads:
+            del pending_downloads[track_name]
+    
+    print(f"")
+    print(f"⏰ ════════════════════════════════════════════════")
+    print(f"⏰ SCHEDULED FOR DELETION: '{track_name}'")
+    print(f"⏰ Will be deleted in {DELETION_DELAY_MINUTES} minutes")
+    print(f"⏰ Delete after: {time.strftime('%H:%M:%S', time.localtime(delete_after))}")
+    print(f"⏰ ════════════════════════════════════════════════")
+    
+    return True
+
+def confirm_track_download(track_name, add_to_logs=True):
+    """
+    Actually delete all files associated with this track.
+    Called by the scheduled deletion thread after the delay.
+    Returns True if track was found and deleted, False otherwise.
+    """
+    # Get track info from scheduled deletions
+    with scheduled_deletions_lock:
+        if track_name in scheduled_deletions:
+            track_info = scheduled_deletions[track_name].get('track_info', {})
+        else:
+            # Fallback to pending downloads for backward compatibility
+            with pending_downloads_lock:
+                if track_name not in pending_downloads:
+                    print(f"⚠️ Track '{track_name}' not found")
+                    return False
+                track_info = pending_downloads[track_name]
+    
+    print(f"")
+    print(f"✅ ════════════════════════════════════════════════")
+    print(f"✅ DELETING TRACK: '{track_name}'")
+    print(f"✅ Cleaning up files...")
+    
+    # Delete processed folder
+    if track_info.get('processed_dir') and os.path.exists(track_info['processed_dir']):
+        try:
+            shutil.rmtree(track_info['processed_dir'])
+            print(f"   🗑️ Deleted processed folder: {track_info['processed_dir']}")
+        except Exception as e:
+            print(f"   ⚠️ Could not delete processed folder: {e}")
+    
+    # Delete original upload file
+    if track_info.get('original_path') and os.path.exists(track_info['original_path']):
+        try:
+            os.remove(track_info['original_path'])
+            print(f"   🗑️ Deleted original: {track_info['original_path']}")
+        except Exception as e:
+            print(f"   ⚠️ Could not delete original: {e}")
+    
+    # Delete htdemucs intermediate folder
+    if track_info.get('htdemucs_dir') and os.path.exists(track_info['htdemucs_dir']):
+        try:
+            shutil.rmtree(track_info['htdemucs_dir'])
+            print(f"   🗑️ Deleted htdemucs folder: {track_info['htdemucs_dir']}")
+        except Exception as e:
+            print(f"   ⚠️ Could not delete htdemucs folder: {e}")
+    
+    # Remove from scheduled deletions
+    with scheduled_deletions_lock:
+        if track_name in scheduled_deletions:
+            del scheduled_deletions[track_name]
+    
+    # Also remove from pending downloads if still there
+    with pending_downloads_lock:
+        if track_name in pending_downloads:
+            del pending_downloads[track_name]
+    
+    print(f"   ✅ Cleanup complete for '{track_name}'")
+    print(f"✅ ════════════════════════════════════════════════")
+    
+    # Add to frontend logs
+    if add_to_logs:
+        try:
+            log_message(f"🗑️ Fichiers supprimés: {track_name}")
+        except:
+            pass  # log_message might not be defined yet during startup
+    
+    return True
+
+def process_scheduled_deletions():
+    """
+    Background thread that processes scheduled deletions.
+    Deletes tracks that have passed their deletion delay.
+    """
+    while True:
+        try:
+            time.sleep(30)  # Check every 30 seconds
+            
+            now = time.time()
+            tracks_to_delete = []
+            
+            with scheduled_deletions_lock:
+                for track_name, info in scheduled_deletions.items():
+                    if now >= info['delete_after']:
+                        tracks_to_delete.append(track_name)
+            
+            for track_name in tracks_to_delete:
+                print(f"⏰ Deletion delay expired for '{track_name}', deleting now...")
+                confirm_track_download(track_name)
+                
+        except Exception as e:
+            print(f"⚠️ Scheduled deletion error: {e}")
+
+# Start scheduled deletion thread
+scheduled_deletion_thread = threading.Thread(target=process_scheduled_deletions, daemon=True)
+scheduled_deletion_thread.start()
 
 def get_pending_tracks_list():
     """Get list of all pending tracks with their info."""
@@ -1782,7 +1874,7 @@ print(f"🚀 {NUM_WORKERS} workers démarrés")
 
 # Configuration for startup cleanup
 CLEANUP_ON_START = os.environ.get('CLEANUP_ON_START', 'true').lower() == 'true'
-DELETE_AFTER_DOWNLOAD = os.environ.get('DELETE_AFTER_DOWNLOAD', 'true').lower() == 'true'
+DELETE_AFTER_DOWNLOAD = os.environ.get('DELETE_AFTER_DOWNLOAD', 'false').lower() == 'true'  # Disabled by default - files deleted via /confirm_download or periodic cleanup
 
 def startup_cleanup():
     """
@@ -1874,8 +1966,8 @@ def startup_cleanup():
 startup_cleanup()
 
 # Configuration for periodic cleanup
-MAX_FILE_AGE_HOURS = int(os.environ.get('MAX_FILE_AGE_HOURS', 1))  # Delete files older than 1 hour by default
-CLEANUP_INTERVAL_MINUTES = int(os.environ.get('CLEANUP_INTERVAL_MINUTES', 15))  # Check every 15 minutes
+MAX_FILE_AGE_HOURS = int(os.environ.get('MAX_FILE_AGE_HOURS', 10))  # Delete files older than 10 hours by default
+CLEANUP_INTERVAL_MINUTES = int(os.environ.get('CLEANUP_INTERVAL_MINUTES', 50))  # Check every 15 minutes
 
 def periodic_cleanup():
     """
@@ -1984,7 +2076,8 @@ print(f"🔧 ══════════════════════�
 print(f"🔧 STORAGE MANAGEMENT SETTINGS:")
 print(f"   CLEANUP_ON_START: {CLEANUP_ON_START}")
 print(f"   DELETE_AFTER_DOWNLOAD: {DELETE_AFTER_DOWNLOAD}")
-print(f"   MAX_FILE_AGE_HOURS: {MAX_FILE_AGE_HOURS}h")
+print(f"   DELETION_DELAY_MINUTES: {DELETION_DELAY_MINUTES}min (after /confirm_download)")
+print(f"   MAX_FILE_AGE_HOURS: {MAX_FILE_AGE_HOURS}h (periodic cleanup)")
 print(f"   CLEANUP_INTERVAL_MINUTES: {CLEANUP_INTERVAL_MINUTES}min")
 print(f"🔧 ════════════════════════════════════════════════")
 print(f"")
@@ -3117,16 +3210,18 @@ def confirm_download():
     print(f"🔔 From: {request.remote_addr}")
     print(f"🔔 ════════════════════════════════════════════════")
     
-    # Confirm and delete
-    if confirm_track_download(track_name):
-        log_message(f"✅ Track téléchargé et supprimé: {track_name}")
+    # Schedule for deletion after delay (instead of immediate deletion)
+    if schedule_track_deletion(track_name):
+        log_message(f"📥 Téléchargement confirmé: {track_name} (suppression dans {DELETION_DELAY_MINUTES}min)")
         return jsonify({
             'success': True,
-            'message': f"Track '{track_name}' confirmed and cleaned up",
+            'message': f"Track '{track_name}' confirmed, will be deleted in {DELETION_DELAY_MINUTES} minutes",
+            'deletion_delay_minutes': DELETION_DELAY_MINUTES,
             'pending_count': get_pending_tracks_count()
         })
     else:
         # Track not found - might already be deleted or never existed
+        log_message(f"⚠️ Confirmation échouée: {track_name} (non trouvé)")
         return jsonify({
             'success': False,
             'error': f"Track '{track_name}' not found in pending downloads",
@@ -3287,21 +3382,43 @@ def debug_url():
 
 @app.route('/debug_cleanup')
 def debug_cleanup():
-    """Debug route to check pending downloads status."""
+    """Debug route to check pending downloads and scheduled deletions status."""
     pending = get_pending_tracks_list()
     warning = check_pending_tracks_warning()
     
+    # Get scheduled deletions info
+    now = time.time()
+    scheduled_info = []
+    with scheduled_deletions_lock:
+        for track_name, info in scheduled_deletions.items():
+            time_remaining = max(0, info['delete_after'] - now)
+            scheduled_info.append({
+                'track_name': track_name,
+                'scheduled_at': time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(info['scheduled_at'])),
+                'delete_after': time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(info['delete_after'])),
+                'seconds_remaining': int(time_remaining),
+                'minutes_remaining': round(time_remaining / 60, 1)
+            })
+    
     return jsonify({
-        'mode': 'confirmation_based',
-        'description': 'Files stay until track.idbyrivoli.com confirms download via /confirm_download',
+        'mode': 'confirmation_based_with_delay',
+        'description': f'Files stay until /confirm_download is called, then deleted after {DELETION_DELAY_MINUTES} minutes. All files auto-deleted after {MAX_FILE_AGE_HOURS} hours.',
+        'settings': {
+            'deletion_delay_minutes': DELETION_DELAY_MINUTES,
+            'max_file_age_hours': MAX_FILE_AGE_HOURS,
+            'cleanup_interval_minutes': CLEANUP_INTERVAL_MINUTES,
+            'delete_after_download': DELETE_AFTER_DOWNLOAD
+        },
         'pending_count': len(pending),
+        'scheduled_deletion_count': len(scheduled_info),
         'max_pending': MAX_PENDING_TRACKS,
         'warning_threshold': PENDING_WARNING_THRESHOLD,
         'warning': warning,
         'pending_tracks': pending,
+        'scheduled_deletions': scheduled_info,
         'current_time': time.strftime("%Y-%m-%d %H:%M:%S"),
         'endpoints': {
-            'confirm_download': 'POST /confirm_download with track_name and api_key',
+            'confirm_download': f'POST /confirm_download with track_name and api_key (triggers {DELETION_DELAY_MINUTES}min deletion delay)',
             'list_pending': 'GET /pending_downloads'
         }
     })
