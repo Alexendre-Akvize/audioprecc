@@ -1522,7 +1522,54 @@ import queue
 
 import json
 
-# No duplicate checking - all tracks are processed fresh each time
+# =============================================================================
+# DUPLICATE/ALREADY PROCESSED TRACK DETECTION
+# =============================================================================
+def is_track_already_processed(filename):
+    """
+    Check if a track has already been processed.
+    Returns (is_processed: bool, processed_dir: str or None)
+    
+    Checks:
+    1. If the track folder exists in PROCESSED_FOLDER
+    2. If the track is in pending_downloads (processed, waiting for download)
+    """
+    clean_name, _ = clean_filename(filename)
+    
+    # Check if track folder exists in PROCESSED_FOLDER
+    track_folder = os.path.join(PROCESSED_FOLDER, clean_name)
+    if os.path.exists(track_folder) and os.path.isdir(track_folder):
+        # Check if it has actual files inside (not empty folder)
+        files = [f for f in os.listdir(track_folder) if f.endswith(('.mp3', '.wav'))]
+        if files:
+            return True, track_folder
+    
+    # Check if track is in pending_downloads
+    with pending_downloads_lock:
+        if clean_name in pending_downloads:
+            return True, pending_downloads[clean_name].get('processed_dir', track_folder)
+    
+    return False, None
+
+def get_already_processed_tracks():
+    """Get list of all track names that have already been processed."""
+    processed_tracks = set()
+    
+    # From PROCESSED_FOLDER
+    if os.path.exists(PROCESSED_FOLDER):
+        for item in os.listdir(PROCESSED_FOLDER):
+            item_path = os.path.join(PROCESSED_FOLDER, item)
+            if os.path.isdir(item_path):
+                # Check if it has actual files
+                files = [f for f in os.listdir(item_path) if f.endswith(('.mp3', '.wav'))]
+                if files:
+                    processed_tracks.add(item)
+    
+    # From pending_downloads
+    with pending_downloads_lock:
+        processed_tracks.update(pending_downloads.keys())
+    
+    return list(processed_tracks)
 
 # Auto-detect optimal number of workers based on CPU/GPU
 import multiprocessing
@@ -2423,6 +2470,7 @@ def enqueue_file():
     data = request.json
     filename = data.get('filename')
     session_id = get_session_id()
+    force_reprocess = data.get('force', False)  # Optional flag to force reprocessing
     
     # Check pending downloads warning
     pending_warning = check_pending_tracks_warning()
@@ -2437,6 +2485,26 @@ def enqueue_file():
         }), 429  # Too Many Requests
     
     if filename:
+        # =============================================================================
+        # CHECK IF TRACK ALREADY PROCESSED - SKIP IF YES
+        # =============================================================================
+        if not force_reprocess:
+            is_processed, processed_dir = is_track_already_processed(filename)
+            if is_processed:
+                clean_name, _ = clean_filename(filename)
+                log_message(f"⏭️ [{session_id}] Track déjà traité, skip: {filename} → {clean_name}", session_id)
+                
+                # Update upload history with skipped status
+                add_to_upload_history(filename, session_id, 'skipped', 'already_processed')
+                
+                return jsonify({
+                    'message': 'Skipped - already processed',
+                    'skipped': True,
+                    'track_name': clean_name,
+                    'processed_dir': processed_dir,
+                    'session_id': session_id,
+                    'pending_downloads': get_pending_tracks_count()
+                })
         # Verify file exists before queueing (with brief retry for race condition)
         session_upload_folder = os.path.join(UPLOAD_FOLDER, session_id)
         filepath = os.path.join(session_upload_folder, filename)
@@ -2494,6 +2562,11 @@ def upload_chunk():
     Supports multiple users uploading simultaneously.
     Handles folder uploads where filename may contain path (e.g., "Folder/file.mp3").
     Uses semaphore to limit concurrent uploads (supports 1000+ track batch uploads).
+    
+    Optional form parameter:
+    - auto_enqueue: If 'true', automatically adds file to processing queue after upload.
+                   This enables parallel upload + analysis for better storage efficiency.
+    - force_reprocess: If 'true', reprocess even if track was already processed.
     """
     # Acquire semaphore with timeout to prevent deadlocks
     acquired = UPLOAD_SEMAPHORE.acquire(timeout=300)  # 5 minute timeout
@@ -2502,6 +2575,10 @@ def upload_chunk():
     
     try:
         session_id = get_session_id()
+        
+        # Check for auto_enqueue option (enables upload + analyze in parallel)
+        auto_enqueue = request.form.get('auto_enqueue', 'false').lower() == 'true'
+        force_reprocess = request.form.get('force_reprocess', 'false').lower() == 'true'
         
         if 'file' not in request.files:
             return jsonify({'error': 'No file part'}), 400
@@ -2527,7 +2604,7 @@ def upload_chunk():
             if not safe_filename:
                 safe_filename = f"upload_{uuid.uuid4().hex[:8]}.mp3"
             
-            print(f"📤 Upload: '{original_filename}' → '{safe_filename}'")
+            print(f"📤 Upload: '{original_filename}' → '{safe_filename}'" + (" [AUTO-ENQUEUE]" if auto_enqueue else ""))
             
             # Use session-specific upload folder
             session_upload_folder = os.path.join(app.config['UPLOAD_FOLDER'], session_id)
@@ -2548,12 +2625,72 @@ def upload_chunk():
                 traceback.print_exc()
                 return jsonify({'error': f'Failed to save file: {str(save_error)}'}), 500
             
-            return jsonify({
+            # Build response
+            response_data = {
                 'message': f'File {safe_filename} uploaded successfully', 
                 'session_id': session_id,
                 'filename': safe_filename,
-                'original_filename': original_filename
-            })
+                'original_filename': original_filename,
+                'auto_enqueued': False
+            }
+            
+            # =========================================================================
+            # AUTO-ENQUEUE: Immediately add to processing queue if requested
+            # This enables parallel upload + analysis for better storage efficiency
+            # =========================================================================
+            if auto_enqueue:
+                # Check pending downloads warning
+                pending_warning = check_pending_tracks_warning()
+                
+                # Block if we've reached critical limit
+                if pending_warning.get('level') == 'critical':
+                    log_message(f"⚠️ [{session_id}] Auto-enqueue bloqué: trop de tracks en attente ({pending_warning['count']})", session_id)
+                    response_data['auto_enqueue_blocked'] = True
+                    response_data['pending_warning'] = pending_warning
+                    return jsonify(response_data)
+                
+                # Check if track already processed (skip if yes, unless force_reprocess)
+                if not force_reprocess:
+                    is_processed, processed_dir = is_track_already_processed(safe_filename)
+                    if is_processed:
+                        clean_name, _ = clean_filename(safe_filename)
+                        log_message(f"⏭️ [{session_id}] Track déjà traité, skip auto-enqueue: {safe_filename} → {clean_name}", session_id)
+                        
+                        # Update upload history with skipped status
+                        add_to_upload_history(safe_filename, session_id, 'skipped', 'already_processed')
+                        
+                        # Clean up the uploaded file since it's already processed
+                        try:
+                            os.remove(filepath)
+                            print(f"🗑️ Removed duplicate upload: {safe_filename}")
+                        except Exception as e:
+                            print(f"⚠️ Could not remove duplicate: {e}")
+                        
+                        response_data['skipped'] = True
+                        response_data['track_name'] = clean_name
+                        response_data['processed_dir'] = processed_dir
+                        response_data['pending_downloads'] = get_pending_tracks_count()
+                        return jsonify(response_data)
+                
+                # Add to queue tracker for UI display
+                add_to_queue_tracker(safe_filename, session_id)
+                
+                # Update upload history status to 'processing'
+                update_upload_history_status(safe_filename, 'processing')
+                
+                # Queue item includes session_id for multi-user support
+                track_queue.put({'filename': safe_filename, 'session_id': session_id})
+                q_size = track_queue.qsize()
+                log_message(f"📥 [{session_id}] Auto-enqueued: {safe_filename} (Queue: {q_size})", session_id)
+                
+                response_data['auto_enqueued'] = True
+                response_data['queue_size'] = q_size
+                response_data['pending_downloads'] = get_pending_tracks_count()
+                
+                if pending_warning.get('warning'):
+                    response_data['pending_warning'] = pending_warning
+            
+            return jsonify(response_data)
         
         return jsonify({'error': 'No file provided'}), 400
         
@@ -2996,6 +3133,33 @@ def confirm_download():
             'pending_count': get_pending_tracks_count()
         }), 404
 
+
+@app.route('/already_processed')
+def list_already_processed():
+    """
+    List all tracks that have already been processed.
+    These tracks will be skipped when re-uploaded.
+    """
+    processed_tracks = get_already_processed_tracks()
+    
+    # Get detailed info for each track
+    tracks_info = []
+    for track_name in processed_tracks:
+        track_folder = os.path.join(PROCESSED_FOLDER, track_name)
+        files = []
+        if os.path.exists(track_folder):
+            files = [f for f in os.listdir(track_folder) if f.endswith(('.mp3', '.wav'))]
+        
+        tracks_info.append({
+            'track_name': track_name,
+            'files_count': len(files),
+            'files': files[:10]  # Limit to first 10 for response size
+        })
+    
+    return jsonify({
+        'count': len(processed_tracks),
+        'tracks': tracks_info
+    })
 
 @app.route('/pending_downloads')
 def list_pending_downloads():

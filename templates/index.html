@@ -1680,11 +1680,19 @@
         });
 
         // Upload file with progress tracking using XMLHttpRequest
-        function uploadFileWithProgress(file, fileIndex, totalFiles) {
+        // With auto_enqueue=true, files are immediately queued for analysis after upload
+        // This enables parallel upload + processing for better storage efficiency
+        function uploadFileWithProgress(file, fileIndex, totalFiles, autoEnqueue = true) {
             return new Promise((resolve, reject) => {
                 const xhr = new XMLHttpRequest();
                 const formData = new FormData();
                 formData.append('file', file);
+                
+                // Auto-enqueue: immediately add to processing queue after upload
+                // This allows analysis to start while more files are still uploading
+                if (autoEnqueue) {
+                    formData.append('auto_enqueue', 'true');
+                }
                 
                 // Track upload progress
                 xhr.upload.addEventListener('progress', (event) => {
@@ -1778,6 +1786,8 @@
         }
 
         // Form submit - optimized for 1000+ track batch uploads
+        // With auto-enqueue: files are uploaded AND queued for analysis in one step
+        // This enables parallel upload + processing for better storage efficiency
         document.getElementById('uploadForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             if (selectedFiles.length === 0) {
@@ -1795,13 +1805,13 @@
             logPanel.classList.add('active');
             resultsSection.classList.add('active');
             submitBtn.disabled = true;
-            submitBtn.innerHTML = '<i data-lucide="loader-2" class="spin"></i> Uploading...';
+            submitBtn.innerHTML = '<i data-lucide="loader-2" class="spin"></i> Uploading & Processing...';
             lucide.createIcons();
             
             if (!startTime) startTime = Date.now();
 
-            statusText.textContent = 'Uploading files...';
-            progressLabel.textContent = 'Uploading';
+            statusText.textContent = 'Uploading & queueing files...';
+            progressLabel.textContent = 'Upload + Queue';
 
             // Start polling if not already running
             if (!pollingInterval) startPolling();
@@ -1816,39 +1826,57 @@
             
             // Show batch info for large uploads
             if (totalFiles >= 100) {
-                addLog(`📦 Starting batch upload of ${totalFiles} files (${UPLOAD_BATCH_SIZE} concurrent)...`, 'info');
+                addLog(`📦 Starting batch upload of ${totalFiles} files with auto-queue (${UPLOAD_BATCH_SIZE} concurrent)...`, 'info');
             }
 
             let uploadedCount = 0;
             let failedCount = 0;
-            const uploadedFilenames = [];
+            let skippedCount = 0;
+            let queuedCount = 0;
             
             // Process uploads in batches for better throughput
+            // With auto_enqueue=true, each file is immediately queued for analysis after upload
             for (let i = 0; i < totalFiles; i += UPLOAD_BATCH_SIZE) {
                 const batch = filesToUpload.slice(i, i + UPLOAD_BATCH_SIZE);
                 const batchNum = Math.floor(i / UPLOAD_BATCH_SIZE) + 1;
                 const totalBatches = Math.ceil(totalFiles / UPLOAD_BATCH_SIZE);
                 
                 if (totalFiles >= 50) {
-                    statusText.textContent = `Uploading batch ${batchNum}/${totalBatches} (${uploadedCount}/${totalFiles} done)...`;
+                    statusText.textContent = `Uploading batch ${batchNum}/${totalBatches} (${uploadedCount}/${totalFiles} done, ${queuedCount} queued)...`;
                 }
                 
-                // Upload batch concurrently
+                // Upload batch concurrently (with auto_enqueue=true)
                 const batchResults = await uploadBatch(batch, i, totalFiles);
                 
                 // Process results
                 for (const result of batchResults) {
                     if (result.success) {
                         const serverFilename = result.result.filename || result.file.name;
-                        uploadedFilenames.push({ original: result.file.name, server: serverFilename });
+                        const response = result.result;
                         uploadedCount++;
                         
-                        // Update track status
+                        // Update track name if it was sanitized by server
                         if (serverFilename !== result.file.name) {
                             delete allTracks[result.file.name];
+                        }
+                        
+                        // Handle different auto-enqueue results
+                        if (response.skipped) {
+                            // Track was already processed - skip
+                            skippedCount++;
+                            allTracks[serverFilename] = { status: 'skipped', progress: 100, worker: null };
+                            addLog(`⏭️ Skipped (already processed): ${serverFilename}`, 'info');
+                        } else if (response.auto_enqueued) {
+                            // File was uploaded AND queued for processing
+                            queuedCount++;
+                            allTracks[serverFilename] = { status: 'waiting', progress: 100, worker: null };
+                        } else if (response.auto_enqueue_blocked) {
+                            // Auto-enqueue was blocked due to too many pending downloads
                             allTracks[serverFilename] = { status: 'uploaded', progress: 100, worker: null };
+                            addLog(`⚠️ Queue blocked: ${serverFilename} - too many pending tracks`, 'warning');
                         } else {
-                            updateTrackStatus(result.file.name, 'uploaded', 100);
+                            // File was uploaded but not auto-enqueued (fallback)
+                            allTracks[serverFilename] = { status: 'uploaded', progress: 100, worker: null };
                         }
                     } else {
                         failedCount++;
@@ -1857,46 +1885,33 @@
                     }
                 }
                 
-                // Update overall progress
-                const uploadProgress = Math.round((i + batch.length) / totalFiles * 50);
+                // Update overall progress (full 100% since upload+queue is one step now)
+                const uploadProgress = Math.round((i + batch.length) / totalFiles * 100);
                 progressFill.style.width = uploadProgress + '%';
                 progressValue.textContent = uploadProgress + '%';
                 updateFullTrackListUI();
             }
             
-            // Now enqueue all successfully uploaded files in batches
-            progressLabel.textContent = 'Queueing';
-            statusText.textContent = `Queueing ${uploadedFilenames.length} files for processing...`;
-            
-            let enqueuedCount = 0;
-            for (let i = 0; i < uploadedFilenames.length; i += ENQUEUE_BATCH_SIZE) {
-                const batch = uploadedFilenames.slice(i, i + ENQUEUE_BATCH_SIZE).map(f => f.server);
-                await enqueueBatch(batch);
-                
-                // Mark as waiting
-                batch.forEach(filename => {
-                    updateTrackStatus(filename, 'waiting');
-                });
-                
-                enqueuedCount += batch.length;
-                const enqueueProgress = 50 + Math.round(enqueuedCount / uploadedFilenames.length * 50);
-                progressFill.style.width = enqueueProgress + '%';
-                progressValue.textContent = enqueueProgress + '%';
-                
-                if (uploadedFilenames.length >= 50) {
-                    statusText.textContent = `Queued ${enqueuedCount}/${uploadedFilenames.length} files...`;
-                }
-            }
+            // No separate enqueue phase needed - files are already queued during upload!
             
             updateFullTrackListUI();
 
             progressFill.style.width = '100%';
             progressValue.textContent = '100%';
             progressLabel.textContent = 'Processing';
-            statusText.textContent = `${uploadedCount} files queued. Processing in background...`;
+            
+            // Build status message
+            let statusMsg = `${queuedCount} files queued for processing`;
+            if (skippedCount > 0) {
+                statusMsg += ` (${skippedCount} skipped - already processed)`;
+            }
+            statusText.textContent = statusMsg;
             
             if (failedCount > 0) {
                 addLog(`⚠️ ${failedCount} files failed to upload`, 'error');
+            }
+            if (skippedCount > 0) {
+                addLog(`⏭️ ${skippedCount} files skipped (already processed)`, 'info');
             }
             
             // Re-enable upload immediately - users can add more files while processing
@@ -1905,7 +1920,10 @@
             submitBtn.innerHTML = '<i data-lucide="plus"></i> Add More Files';
             lucide.createIcons();
             
-            showToast(`${uploadedCount} files added to queue` + (failedCount > 0 ? ` (${failedCount} failed)` : ''));
+            let toastMsg = `${queuedCount} files queued`;
+            if (skippedCount > 0) toastMsg += `, ${skippedCount} skipped`;
+            if (failedCount > 0) toastMsg += `, ${failedCount} failed`;
+            showToast(toastMsg);
         });
 
         function startPolling() {
