@@ -1758,12 +1758,13 @@
         const ENQUEUE_BATCH_SIZE = 20; // Number of concurrent enqueue calls
         
         // Batch upload helper - uploads multiple files concurrently
-        async function uploadBatch(files, startIdx, totalFiles) {
+        // With autoEnqueue=true (default), files are immediately queued for processing
+        async function uploadBatch(files, startIdx, totalFiles, autoEnqueue = true) {
             const results = await Promise.allSettled(
                 files.map((file, batchIdx) => {
                     const globalIdx = startIdx + batchIdx;
                     updateTrackStatus(file.name, 'uploading', 0);
-                    return uploadFileWithProgress(file, globalIdx, totalFiles)
+                    return uploadFileWithProgress(file, globalIdx, totalFiles, autoEnqueue)
                         .then(result => ({ file, result, success: true }))
                         .catch(error => ({ file, error, success: false }));
                 })
@@ -2675,6 +2676,8 @@
                     return '<i data-lucide="x-circle" style="width:12px;height:12px;"></i>';
                 case 'processing':
                     return '<i data-lucide="loader-2" style="width:12px;height:12px;" class="spin"></i>';
+                case 'skipped':
+                    return '<i data-lucide="skip-forward" style="width:12px;height:12px;"></i>';
                 default:
                     return '<i data-lucide="clock" style="width:12px;height:12px;"></i>';
             }
