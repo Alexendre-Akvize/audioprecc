@@ -3396,7 +3396,34 @@ def confirm_download():
     print(f"🔔 From: {request.remote_addr}")
     print(f"🔔 ════════════════════════════════════════════════")
     
-    # Schedule for deletion after delay (instead of immediate deletion)
+    # Check both tracking systems
+    in_pending_downloads = track_name in pending_downloads
+    in_sequential_tracking = track_name in track_download_status
+    
+    print(f"   In pending_downloads: {in_pending_downloads}")
+    print(f"   In track_download_status (sequential): {in_sequential_tracking}")
+    
+    # SEQUENTIAL MODE: If track is in sequential tracking, trigger cleanup
+    if SEQUENTIAL_MODE and in_sequential_tracking:
+        # Mark all files as downloaded and cleanup
+        with track_download_status_lock:
+            if track_name in track_download_status:
+                # Mark all files as downloaded
+                for f in track_download_status[track_name]['files']:
+                    track_download_status[track_name]['files'][f] = True
+                track_download_status[track_name]['all_downloaded'] = True
+        
+        # Trigger cleanup
+        cleanup_track_after_downloads(track_name)
+        log_message(f"📥 Téléchargement confirmé (sequential): {track_name}")
+        
+        return jsonify({
+            'success': True,
+            'message': f"Track '{track_name}' confirmed and cleaned up (sequential mode)",
+            'pending_count': get_pending_tracks_count()
+        })
+    
+    # Legacy mode: Schedule for deletion after delay
     if schedule_track_deletion(track_name):
         log_message(f"📥 Téléchargement confirmé: {track_name} (suppression dans {DELETION_DELAY_MINUTES}min)")
         return jsonify({
@@ -3405,14 +3432,26 @@ def confirm_download():
             'deletion_delay_minutes': DELETION_DELAY_MINUTES,
             'pending_count': get_pending_tracks_count()
         })
-    else:
-        # Track not found - might already be deleted or never existed
-        log_message(f"⚠️ Confirmation échouée: {track_name} (non trouvé)")
-        return jsonify({
-            'success': False,
-            'error': f"Track '{track_name}' not found in pending downloads",
-            'pending_count': get_pending_tracks_count()
-        }), 404
+    
+    # Track not found in either system - try to find similar names
+    similar_tracks = []
+    with track_download_status_lock:
+        for name in track_download_status.keys():
+            if track_name.lower() in name.lower() or name.lower() in track_name.lower():
+                similar_tracks.append(f"sequential: {name}")
+    with pending_downloads_lock:
+        for name in pending_downloads.keys():
+            if track_name.lower() in name.lower() or name.lower() in track_name.lower():
+                similar_tracks.append(f"pending: {name}")
+    
+    log_message(f"⚠️ Confirmation échouée: {track_name} (non trouvé)")
+    return jsonify({
+        'success': False,
+        'error': f"Track '{track_name}' not found",
+        'similar_tracks': similar_tracks[:5] if similar_tracks else [],
+        'hint': 'Track name must match exactly (case-sensitive)',
+        'pending_count': get_pending_tracks_count()
+    }), 404
 
 
 @app.route('/track_download_status')
