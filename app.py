@@ -27,9 +27,9 @@ app.secret_key = os.environ.get('SECRET_KEY', 'idbyrivoli-secret-key-2024')
 DEV_MODE = True
 
 # DEV_ACTION: Choose the processing mode
-# - "extended" : Create extended version (intro + outro loops)
+# - "extended" : Create extended version (intro + outro drums loops) - MÉLODIE INTACTE
 # - "melody"   : Isolate melody (harmonic) vs drums (percussive)
-DEV_ACTION = "melody"  # <-- CHANGE THIS TO SWITCH MODE
+DEV_ACTION = "extended"  # <-- CHANGE THIS TO SWITCH MODE
 
 print(f"🔵 DEV MODE ACTIVÉ - Action: {DEV_ACTION.upper()}")
 
@@ -2511,21 +2511,24 @@ def isolate_melody_dev(filepath, filename, session_id='global'):
 # Modified process function for SINGLE track with RETRY LOGIC
 def create_extended_version_dev(filepath, filename, session_id='global'):
     """
-    [DEV MODE] Create Extended version only.
+    [DEV MODE] Create Extended version - MÉLODIE INTACTE.
     
-    Specifications:
-    1. Analyze entire track (BPM, duration, structure)
-    2. Extend intro with clean drums/rhythmic loop (no vocals)
-       - If track 0:00-3:30: +16 bars
-       - If track > 3:31: +32 bars
-    3. Extend outro with clean drums/rhythmic loop (no vocals)
-    4. Ensure smooth transitions (crossfade 2s)
-    5. Target: 2:30-3:30 → 5:00-7:00
+    PRINCIPE CLÉ: La mélodie ne doit JAMAIS être coupée ou fondue.
+    
+    Méthode:
+    1. Séparer le morceau avec HPSS (Harmonique vs Percussif)
+    2. Extraire une boucle de DRUMS PURS (composante percussive uniquement)
+    3. Créer intro/outro avec les drums purs SEULEMENT
+    4. Le morceau ORIGINAL reste 100% INTACT
+    5. Transitions douces sur les drums, pas sur la mélodie
+    
+    Résultat: [Drums loop] → [MORCEAU ORIGINAL COMPLET] → [Drums loop]
     
     Returns: (success: bool, output_path: str or None, error_message: str or None)
     """
     try:
-        log_message(f"🔵 [DEV] Création version Extended pour: {filename}", session_id)
+        log_message(f"🔵 [DEV] Extended v2 - MÉLODIE PROTÉGÉE", session_id)
+        log_message(f"📁 Fichier: {filename}", session_id)
         update_queue_item(filename, progress=5, step='Chargement audio...')
         
         # Load audio file (supports MP3, WAV, M4A, FLAC, etc.)
@@ -2534,7 +2537,7 @@ def create_extended_version_dev(filepath, filename, session_id='global'):
         log_message(f"📊 Durée originale: {int(duration_sec//60)}:{int(duration_sec%60):02d}", session_id)
         
         # =====================================================================
-        # STEP 1: ANALYZE TRACK (BPM, Structure)
+        # STEP 1: ANALYZE TRACK (BPM)
         # =====================================================================
         update_queue_item(filename, progress=10, step='Analyse BPM...')
         log_message(f"🎵 Analyse du morceau...", session_id)
@@ -2559,118 +2562,153 @@ def create_extended_version_dev(filepath, filename, session_id='global'):
                 bars_to_add = 32
                 log_message(f"📏 Durée > 3:30 → Extension de {bars_to_add} mesures", session_id)
             
-            extension_duration = bar_duration * bars_to_add * 1000  # milliseconds
-            log_message(f"⏱️  Extension: {bars_to_add} mesures = {extension_duration/1000:.1f}s", session_id)
+            extension_duration_ms = bar_duration * bars_to_add * 1000  # milliseconds
+            log_message(f"⏱️  Extension: {bars_to_add} mesures = {extension_duration_ms/1000:.1f}s", session_id)
             
         except Exception as e:
             log_message(f"⚠️ Erreur analyse BPM: {e} - Utilisation valeurs par défaut", session_id)
+            y, sr = librosa.load(filepath, sr=44100)
             bpm = 128
             bars_to_add = 16
             bar_duration = (60.0 / bpm) * 4
-            extension_duration = bar_duration * bars_to_add * 1000
-        
-        update_queue_item(filename, progress=20, step='Analyse structure...')
+            extension_duration_ms = bar_duration * bars_to_add * 1000
         
         # =====================================================================
-        # STEP 2: FIND CLEAN RHYTHMIC LOOP (no vocals)
+        # STEP 2: HPSS - SÉPARER MÉLODIE ET DRUMS
         # =====================================================================
-        log_message(f"🔍 Recherche boucle rythmique propre (sans voix)...", session_id)
+        update_queue_item(filename, progress=20, step='Séparation mélodie/drums (HPSS)...')
+        log_message(f"🔬 Séparation HPSS: Harmonique (mélodie) vs Percussif (drums)...", session_id)
         
-        try:
-            # Analyze spectral characteristics to find instrumental parts
-            hop_length = 512
-            spectral_centroids = librosa.feature.spectral_centroid(y=y, sr=sr, hop_length=hop_length)[0]
-            
-            # Convert to time segments (1 second windows)
-            window_size = int(sr / hop_length)
-            num_windows = len(spectral_centroids) // window_size
-            
-            segment_scores = []
-            for i in range(num_windows):
-                start_frame = i * window_size
-                end_frame = min((i + 1) * window_size, len(spectral_centroids))
-                segment_centroid = np.mean(spectral_centroids[start_frame:end_frame])
-                segment_scores.append((i, segment_centroid))
-            
-            # Find segments with lower spectral centroid (likely instrumental)
-            # Skip first 10% and last 10% to avoid intro/outro artifacts
-            safe_start = max(1, int(num_windows * 0.1))
-            safe_end = max(safe_start + 1, int(num_windows * 0.9))
-            safe_segments = segment_scores[safe_start:safe_end]
-            
-            if safe_segments:
-                # Sort by centroid (lower = more likely instrumental)
-                safe_segments.sort(key=lambda x: x[1])
-                best_segment_idx = safe_segments[0][0]
-                
-                # Extract loop (4 bars)
-                loop_duration_target = bar_duration * 4
-                loop_start_ms = best_segment_idx * 1000
-                loop_end_ms = loop_start_ms + (loop_duration_target * 1000)
-                loop_end_ms = min(loop_end_ms, len(audio))
-                
-                rhythmic_loop = audio[loop_start_ms:loop_end_ms]
-                log_message(f"✂️  Boucle extraite: {loop_start_ms/1000:.1f}s - {loop_end_ms/1000:.1f}s", session_id)
-            else:
-                # Fallback: use middle section
-                mid_point = len(audio) // 2
-                loop_duration_ms = bar_duration * 4 * 1000
-                rhythmic_loop = audio[mid_point:mid_point + int(loop_duration_ms)]
-                log_message(f"⚠️ Fallback: boucle du milieu du morceau", session_id)
-                
-        except Exception as e:
-            log_message(f"⚠️ Erreur extraction boucle: {e} - Utilisation section milieu", session_id)
-            mid_point = len(audio) // 2
-            loop_duration_ms = 8000
-            rhythmic_loop = audio[mid_point:mid_point + loop_duration_ms]
+        # HPSS: Harmonic-Percussive Source Separation
+        y_harmonic, y_percussive = librosa.effects.hpss(y)
         
-        update_queue_item(filename, progress=40, step='Création intro extended...')
+        # Calculer l'énergie pour info
+        energy_harmonic = np.sum(y_harmonic ** 2)
+        energy_percussive = np.sum(y_percussive ** 2)
+        energy_total = energy_harmonic + energy_percussive
+        ratio_harmonic = (energy_harmonic / energy_total) * 100
+        ratio_percussive = (energy_percussive / energy_total) * 100
+        
+        log_message(f"✅ Séparation HPSS terminée:", session_id)
+        log_message(f"   🎹 Mélodie (harmonique): {ratio_harmonic:.1f}%", session_id)
+        log_message(f"   🥁 Drums (percussif): {ratio_percussive:.1f}%", session_id)
         
         # =====================================================================
-        # STEP 3: CREATE EXTENDED INTRO
+        # STEP 3: CONVERTIR DRUMS EN AUDIOSEGMENT
         # =====================================================================
-        log_message(f"🎬 Création intro extended ({bars_to_add} mesures)...", session_id)
+        update_queue_item(filename, progress=35, step='Extraction drums purs...')
+        log_message(f"🥁 Conversion des drums en audio...", session_id)
         
-        intro_extended = AudioSegment.empty()
-        while len(intro_extended) < extension_duration:
-            intro_extended += rhythmic_loop
+        # Normaliser et convertir en int16
+        if np.max(np.abs(y_percussive)) > 0:
+            y_drums_normalized = y_percussive / np.max(np.abs(y_percussive)) * 0.95
+        else:
+            y_drums_normalized = y_percussive
+        y_drums_int16 = (y_drums_normalized * 32767).astype(np.int16)
         
-        intro_extended = intro_extended[:int(extension_duration)]
-        intro_extended = intro_extended.fade_in(2000)  # 2s fade-in
+        # Créer AudioSegment mono
+        drums_full = AudioSegment(
+            y_drums_int16.tobytes(),
+            frame_rate=sr,
+            sample_width=2,
+            channels=1
+        )
         
-        log_message(f"✅ Intro: {len(intro_extended)/1000:.1f}s", session_id)
+        # Convertir en stéréo pour matcher l'audio original
+        if audio.channels == 2:
+            drums_full = drums_full.set_channels(2)
         
-        update_queue_item(filename, progress=60, step='Création outro extended...')
-        
-        # =====================================================================
-        # STEP 4: CREATE EXTENDED OUTRO
-        # =====================================================================
-        log_message(f"🎬 Création outro extended ({bars_to_add} mesures)...", session_id)
-        
-        outro_extended = AudioSegment.empty()
-        while len(outro_extended) < extension_duration:
-            outro_extended += rhythmic_loop
-        
-        outro_extended = outro_extended[:int(extension_duration)]
-        outro_extended = outro_extended.fade_out(4000)  # 4s fade-out
-        
-        log_message(f"✅ Outro: {len(outro_extended)/1000:.1f}s", session_id)
-        
-        update_queue_item(filename, progress=70, step='Assemblage final...')
+        log_message(f"✅ Drums extraits: {len(drums_full)/1000:.1f}s", session_id)
         
         # =====================================================================
-        # STEP 5: ASSEMBLE EXTENDED VERSION
+        # STEP 4: EXTRAIRE UNE BOUCLE DE DRUMS (4 mesures)
         # =====================================================================
-        log_message(f"🔨 Assemblage: Intro + Original + Outro...", session_id)
+        update_queue_item(filename, progress=45, step='Sélection boucle drums...')
+        log_message(f"🔍 Recherche meilleure boucle drums (4 mesures)...", session_id)
         
-        # Simple crossfades of 2 seconds
-        crossfade_duration = 2000
+        loop_duration_ms = int(bar_duration * 4 * 1000)  # 4 mesures
         
-        extended_audio = intro_extended.append(audio, crossfade=crossfade_duration)
-        extended_audio = extended_audio.append(outro_extended, crossfade=crossfade_duration)
+        # Chercher une section avec beaucoup d'énergie percussive
+        # On analyse par fenêtres de 4 mesures
+        best_energy = 0
+        best_start = 0
+        step_ms = int(bar_duration * 1000)  # Sauter par mesure
+        
+        # Éviter les 10% début et fin
+        search_start = int(len(drums_full) * 0.1)
+        search_end = int(len(drums_full) * 0.9) - loop_duration_ms
+        
+        for start_ms in range(search_start, search_end, step_ms):
+            segment = drums_full[start_ms:start_ms + loop_duration_ms]
+            # Calculer l'énergie RMS du segment
+            energy = segment.rms
+            if energy > best_energy:
+                best_energy = energy
+                best_start = start_ms
+        
+        # Extraire la meilleure boucle drums
+        drums_loop = drums_full[best_start:best_start + loop_duration_ms]
+        log_message(f"✂️  Boucle drums sélectionnée: {best_start/1000:.1f}s - {(best_start + loop_duration_ms)/1000:.1f}s", session_id)
+        log_message(f"   Énergie RMS: {best_energy}", session_id)
+        
+        # =====================================================================
+        # STEP 5: CRÉER INTRO EXTENDED (DRUMS PURS)
+        # =====================================================================
+        update_queue_item(filename, progress=55, step='Création intro drums...')
+        log_message(f"🎬 Création intro extended ({bars_to_add} mesures) - DRUMS PURS...", session_id)
+        
+        # Répéter la boucle pour atteindre la durée cible
+        intro_drums = AudioSegment.empty()
+        while len(intro_drums) < extension_duration_ms:
+            intro_drums += drums_loop
+        
+        # Couper à la durée exacte
+        intro_drums = intro_drums[:int(extension_duration_ms)]
+        
+        # Fade-in léger au tout début
+        intro_drums = intro_drums.fade_in(1500)
+        
+        log_message(f"✅ Intro drums: {len(intro_drums)/1000:.1f}s (drums purs, pas de mélodie)", session_id)
+        
+        # =====================================================================
+        # STEP 6: CRÉER OUTRO EXTENDED (DRUMS PURS)
+        # =====================================================================
+        update_queue_item(filename, progress=65, step='Création outro drums...')
+        log_message(f"🎬 Création outro extended ({bars_to_add} mesures) - DRUMS PURS...", session_id)
+        
+        # Répéter la boucle
+        outro_drums = AudioSegment.empty()
+        while len(outro_drums) < extension_duration_ms:
+            outro_drums += drums_loop
+        
+        # Couper à la durée exacte
+        outro_drums = outro_drums[:int(extension_duration_ms)]
+        
+        # Fade-out à la fin
+        outro_drums = outro_drums.fade_out(3000)
+        
+        log_message(f"✅ Outro drums: {len(outro_drums)/1000:.1f}s (drums purs, pas de mélodie)", session_id)
+        
+        # =====================================================================
+        # STEP 7: ASSEMBLAGE FINAL - MÉLODIE INTACTE
+        # =====================================================================
+        update_queue_item(filename, progress=75, step='Assemblage final...')
+        log_message(f"🔨 Assemblage: [Drums intro] + [ORIGINAL INTACT] + [Drums outro]", session_id)
+        log_message(f"⚠️  Le morceau original reste 100% INTACT - mélodie non touchée!", session_id)
+        
+        # Crossfade court pour transition drums → morceau
+        crossfade_ms = int(bar_duration * 1000)  # 1 mesure de crossfade
+        
+        # Intro drums → Morceau original (crossfade sur 1 mesure)
+        extended_audio = intro_drums.append(audio, crossfade=crossfade_ms)
+        
+        # Morceau original → Outro drums (crossfade sur 1 mesure)
+        extended_audio = extended_audio.append(outro_drums, crossfade=crossfade_ms)
         
         final_duration = len(extended_audio) / 1000.0
-        log_message(f"✨ Extended terminé: {int(final_duration//60)}:{int(final_duration%60):02d} (vs {int(duration_sec//60)}:{int(duration_sec%60):02d} original)", session_id)
+        log_message(f"✨ Extended terminé: {int(final_duration//60)}:{int(final_duration%60):02d}", session_id)
+        log_message(f"   Original: {int(duration_sec//60)}:{int(duration_sec%60):02d}", session_id)
+        log_message(f"   Ajouté: +{(final_duration - duration_sec):.1f}s ({bars_to_add * 2} mesures total)", session_id)
         
         # Prepare output
         update_queue_item(filename, progress=80, step='Export MP3...')
