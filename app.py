@@ -3316,42 +3316,92 @@ def download_file():
     
     return response
 
-@app.route('/confirm_download', methods=['POST'])
+@app.route('/confirm_download', methods=['POST', 'GET'])
 def confirm_download():
     """
     Endpoint for track.idbyrivoli.com to confirm successful download of a track.
     Once confirmed, all files for this track will be deleted.
     
-    Expected payload:
+    Expected payload (POST JSON):
     {
         "track_name": "Track Name",  // The track name (folder name in processed/)
-        "api_key": "your-api-key"    // Authentication
+        "api_key": "your-api-key"    // Authentication (optional)
     }
     
-    Or via query params:
+    Or via query params (GET or POST):
     /confirm_download?track_name=Track%20Name&api_key=your-api-key
+    
+    Or via form data (POST):
+    track_name=Track%20Name
     """
-    # Get track_name from JSON body or query params
-    if request.is_json:
-        data = request.get_json()
-        track_name = data.get('track_name')
-        provided_key = data.get('api_key')
-    else:
-        track_name = request.args.get('track_name')
-        provided_key = request.args.get('api_key')
+    track_name = None
+    provided_key = None
+    
+    # Debug: log the request details
+    print(f"")
+    print(f"🔔 CONFIRM_DOWNLOAD REQUEST RECEIVED:")
+    print(f"   Method: {request.method}")
+    print(f"   Content-Type: {request.content_type}")
+    print(f"   Query params: {dict(request.args)}")
+    print(f"   Is JSON: {request.is_json}")
+    
+    # Try to get track_name from multiple sources (most flexible)
+    
+    # 1. Check query params first (works for both GET and POST)
+    track_name = request.args.get('track_name') or request.args.get('trackName')
+    provided_key = request.args.get('api_key') or request.args.get('apiKey')
+    
+    # 2. Check JSON body
+    if not track_name and request.is_json:
+        try:
+            data = request.get_json(force=False, silent=True)
+            if data:
+                track_name = data.get('track_name') or data.get('trackName')
+                provided_key = provided_key or data.get('api_key') or data.get('apiKey')
+                print(f"   JSON body: {data}")
+        except Exception as e:
+            print(f"   JSON parse error: {e}")
+    
+    # 3. Check form data
+    if not track_name and request.form:
+        track_name = request.form.get('track_name') or request.form.get('trackName')
+        provided_key = provided_key or request.form.get('api_key') or request.form.get('apiKey')
+        print(f"   Form data: {dict(request.form)}")
+    
+    # 4. Try to parse raw body as JSON (for cases where Content-Type is wrong)
+    if not track_name and request.data:
+        try:
+            import json
+            data = json.loads(request.data.decode('utf-8'))
+            track_name = data.get('track_name') or data.get('trackName')
+            provided_key = provided_key or data.get('api_key') or data.get('apiKey')
+            print(f"   Parsed raw body as JSON: {data}")
+        except:
+            print(f"   Raw body (not JSON): {request.data[:200] if request.data else 'empty'}")
     
     # Also check Authorization header
     auth_header = request.headers.get('Authorization', '')
     if auth_header.startswith('Bearer '):
         provided_key = auth_header[7:]
     
-    # Validate API key
+    print(f"   Extracted track_name: '{track_name}'")
+    
+    # Validate API key (disabled for now)
     # if provided_key != API_KEY:
     #     print(f"❌ Invalid API key for confirm_download: {track_name}")
     #     return jsonify({'error': 'Invalid API key'}), 401
     
     if not track_name:
-        return jsonify({'error': 'track_name is required'}), 400
+        print(f"   ❌ ERROR: track_name is missing!")
+        return jsonify({
+            'error': 'track_name is required',
+            'hint': 'Send as JSON body {"track_name": "..."} or query param ?track_name=...',
+            'received': {
+                'query_params': dict(request.args),
+                'content_type': request.content_type,
+                'method': request.method
+            }
+        }), 400
     
     # URL decode track name (in case it's encoded)
     track_name = urllib.parse.unquote(track_name)
