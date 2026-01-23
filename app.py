@@ -1967,7 +1967,7 @@ startup_cleanup()
 
 # Configuration for periodic cleanup
 MAX_FILE_AGE_HOURS = int(os.environ.get('MAX_FILE_AGE_HOURS', 10))  # Delete files older than 10 hours by default
-CLEANUP_INTERVAL_MINUTES = int(os.environ.get('CLEANUP_INTERVAL_MINUTES', 50))  # Check every 15 minutes
+CLEANUP_INTERVAL_MINUTES = int(os.environ.get('CLEANUP_INTERVAL_MINUTES', 500))  # Check every 15 minutes
 
 def periodic_cleanup():
     """
