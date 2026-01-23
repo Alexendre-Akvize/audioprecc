@@ -685,6 +685,12 @@
             background: rgba(161, 161, 170, 0.15);
             color: var(--text-muted);
         }
+        
+        .track-list-item-status.ready_for_download {
+            background: rgba(245, 158, 11, 0.2);
+            color: var(--warning);
+            font-weight: 500;
+        }
 
         .track-list-item-status.completed {
             background: rgba(34, 197, 94, 0.15);
@@ -723,6 +729,16 @@
 
         .track-checkbox.skipped svg {
             color: var(--text-muted);
+            opacity: 1;
+        }
+        
+        .track-checkbox.ready_for_download {
+            border-color: var(--warning);
+            background: rgba(245, 158, 11, 0.2);
+        }
+
+        .track-checkbox.ready_for_download svg {
+            color: var(--warning);
             opacity: 1;
         }
 
@@ -965,6 +981,83 @@
         .dl-btn-wav:hover {
             background: var(--bg-tertiary);
             border-color: var(--border-hover);
+        }
+        
+        /* Downloaded state for buttons */
+        .dl-btn.downloaded {
+            opacity: 0.6;
+            background: var(--success) !important;
+            color: white !important;
+            border-color: var(--success) !important;
+        }
+        
+        /* Track status badges */
+        .track-status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: 100px;
+            font-size: 11px;
+            font-weight: 500;
+            margin-left: 8px;
+        }
+        
+        .track-status-badge svg {
+            width: 12px;
+            height: 12px;
+        }
+        
+        .track-status-badge.ready {
+            background: var(--warning);
+            color: var(--bg-primary);
+        }
+        
+        .track-status-badge.completed {
+            background: var(--success);
+            color: white;
+        }
+        
+        /* Track download progress bar */
+        .track-download-progress {
+            height: 3px;
+            background: var(--bg-tertiary);
+            width: 100%;
+        }
+        
+        .track-download-progress-bar {
+            height: 100%;
+            background: var(--warning);
+            transition: width 0.3s ease;
+        }
+        
+        /* Track icon states */
+        .track-icon.ready {
+            background: var(--warning);
+        }
+        
+        .track-icon.ready svg {
+            color: var(--bg-primary);
+        }
+        
+        .track-icon.completed {
+            background: var(--success);
+        }
+        
+        .track-icon.completed svg {
+            color: white;
+        }
+        
+        /* Download all button */
+        .btn-download-all {
+            margin-left: auto;
+            padding: 8px 16px;
+            font-size: 12px;
+        }
+        
+        .btn-download-all svg {
+            width: 14px;
+            height: 14px;
         }
 
         /* Log Panel */
@@ -1407,6 +1500,10 @@
                                 <i data-lucide="clock"></i>
                                 <span id="waitingCount">0</span> waiting
                             </div>
+                            <div class="status-badge ready" id="readyBadge" style="display: none; background: rgba(245, 158, 11, 0.2); color: var(--warning);">
+                                <i data-lucide="download"></i>
+                                <span id="readyCount">0</span> ready
+                            </div>
                             <div class="status-badge completed" id="completedBadge" style="display: none;">
                                 <i data-lucide="check-circle-2"></i>
                                 <span id="completedCount">0</span> done
@@ -1563,8 +1660,14 @@
         let lastResultsCount = 0;
         
         // Full track tracking system
-        // Status: 'selected' | 'uploading' | 'waiting' | 'processing' | 'completed'
+        // Status: 'selected' | 'uploading' | 'waiting' | 'processing' | 'ready_for_download' | 'completed'
         let allTracks = {}; // { filename: { status: string, progress: number, worker: number|null } }
+        
+        // ==========================================================================
+        // SEQUENTIAL MODE: Track individual file downloads per track
+        // ==========================================================================
+        let trackDownloads = {}; // { trackName: { files: {filename: downloaded}, edits: [], total: n, downloaded: n } }
+        let currentDownloadingTrack = null; // Track currently being downloaded
 
         // DOM Elements
         const dropZone = document.getElementById('dropZone');
@@ -2166,38 +2269,219 @@
             event.preventDefault();
             downloadWithRetry(url, filename);
         }
+        
+        // ==========================================================================
+        // SEQUENTIAL MODE: Tracked download functions
+        // ==========================================================================
+        
+        async function handleTrackedDownload(event, url, filename, trackName) {
+            event.preventDefault();
+            
+            // Check if already downloaded
+            if (trackDownloads[trackName]?.files[filename]) {
+                showToast(`${filename} already downloaded`);
+                return;
+            }
+            
+            const success = await downloadWithRetry(url, filename);
+            
+            if (success && trackDownloads[trackName]) {
+                // Mark file as downloaded
+                trackDownloads[trackName].files[filename] = true;
+                trackDownloads[trackName].downloaded++;
+                
+                console.log(`✅ Downloaded: ${filename} for ${trackName}`);
+                console.log(`   Progress: ${trackDownloads[trackName].downloaded}/${trackDownloads[trackName].total}`);
+                
+                // Check if all files are downloaded
+                const trackData = trackDownloads[trackName];
+                if (trackData.downloaded === trackData.total) {
+                    showToast(`🎉 All files downloaded for: ${trackName}`);
+                    
+                    // Update track status to completed
+                    const trackKey = Object.keys(allTracks).find(k => k.includes(trackName));
+                    if (trackKey) {
+                        allTracks[trackKey].status = 'completed';
+                    }
+                    
+                    // Track will be auto-deleted by backend since all files downloaded
+                }
+                
+                // Refresh the results display to update UI
+                const statusRes = await fetch('/status');
+                const status = await statusRes.json();
+                if (status.results?.length > 0) {
+                    displayResults(status.results);
+                }
+            }
+        }
+        
+        async function downloadAllForTrack(trackName) {
+            const trackData = trackDownloads[trackName];
+            if (!trackData) {
+                showToast('Track not found');
+                return;
+            }
+            
+            showToast(`Downloading all files for: ${trackName}...`);
+            
+            // Get list of files not yet downloaded
+            const pendingFiles = Object.entries(trackData.files)
+                .filter(([file, downloaded]) => !downloaded)
+                .map(([file]) => file);
+            
+            if (pendingFiles.length === 0) {
+                showToast('All files already downloaded!');
+                return;
+            }
+            
+            // Download each file sequentially
+            for (const filename of pendingFiles) {
+                // Find the corresponding edit and URL
+                const edit = trackData.edits.find(e => 
+                    filename === e.name + '.mp3' || filename === e.name + '.wav'
+                );
+                
+                if (edit) {
+                    const url = filename.endsWith('.mp3') ? edit.mp3 : edit.wav;
+                    
+                    const success = await downloadWithRetry(url, filename);
+                    
+                    if (success) {
+                        // Mark file as downloaded
+                        trackData.files[filename] = true;
+                        trackData.downloaded++;
+                        
+                        console.log(`✅ Downloaded: ${filename} (${trackData.downloaded}/${trackData.total})`);
+                    } else {
+                        console.error(`❌ Failed to download: ${filename}`);
+                    }
+                    
+                    // Small delay between downloads to avoid overwhelming the browser
+                    await new Promise(r => setTimeout(r, 200));
+                }
+            }
+            
+            // Check if all files are now downloaded
+            if (trackData.downloaded === trackData.total) {
+                showToast(`🎉 All files downloaded for: ${trackName} - Track cleaned up`);
+                
+                // Update track status to completed
+                const trackKey = Object.keys(allTracks).find(k => k.includes(trackName));
+                if (trackKey) {
+                    allTracks[trackKey].status = 'completed';
+                }
+            } else {
+                const remaining = trackData.total - trackData.downloaded;
+                showToast(`Downloaded. ${remaining} files remaining for: ${trackName}`);
+            }
+            
+            // Refresh the results display
+            const statusRes = await fetch('/status');
+            const status = await statusRes.json();
+            if (status.results?.length > 0) {
+                displayResults(status.results);
+            }
+        }
 
         function displayResults(results) {
             processedCount = results.length;
-            resultsCount.textContent = `${results.length} tracks ready`;
+            
+            // Count tracks by download status
+            let readyCount = 0;
+            let completedCount = 0;
+            
+            results.forEach(track => {
+                const trackData = trackDownloads[track.original];
+                if (trackData && trackData.downloaded === trackData.total) {
+                    completedCount++;
+                } else {
+                    readyCount++;
+                }
+            });
+            
+            resultsCount.textContent = `${readyCount} ready for download, ${completedCount} completed`;
             resultsList.innerHTML = '';
             
             results.forEach(track => {
                 const card = document.createElement('div');
                 card.className = 'track-card';
+                const trackName = track.original;
+                
+                // Initialize download tracking for this track if not exists
+                if (!trackDownloads[trackName]) {
+                    const files = {};
+                    track.edits.forEach(edit => {
+                        files[edit.name + '.mp3'] = false;
+                        files[edit.name + '.wav'] = false;
+                    });
+                    trackDownloads[trackName] = {
+                        files: files,
+                        edits: track.edits,
+                        total: track.edits.length * 2, // MP3 + WAV for each edit
+                        downloaded: 0
+                    };
+                }
+                
+                const trackData = trackDownloads[trackName];
+                const isFullyDownloaded = trackData.downloaded === trackData.total;
+                const downloadProgress = Math.round((trackData.downloaded / trackData.total) * 100);
+                
+                // Update allTracks status based on download status
+                if (allTracks[trackName + '.mp3']) {
+                    allTracks[trackName + '.mp3'].status = isFullyDownloaded ? 'completed' : 'ready_for_download';
+                }
                 
                 let editsHtml = track.edits.map(edit => {
                     const mp3Filename = edit.name + '.mp3';
                     const wavFilename = edit.name + '.wav';
+                    const mp3Downloaded = trackData.files[mp3Filename] || false;
+                    const wavDownloaded = trackData.files[wavFilename] || false;
+                    
                     return `
                         <div class="edit-item">
                             <span class="edit-name">${escapeHtml(edit.name)}</span>
                             <div class="edit-actions">
-                                <a href="${edit.mp3}" class="dl-btn dl-btn-mp3" onclick="handleDownload(event, '${edit.mp3}', '${escapeHtml(mp3Filename)}')">MP3</a>
-                                <a href="${edit.wav}" class="dl-btn dl-btn-wav" onclick="handleDownload(event, '${edit.wav}', '${escapeHtml(wavFilename)}')">WAV</a>
+                                <a href="${edit.mp3}" class="dl-btn dl-btn-mp3 ${mp3Downloaded ? 'downloaded' : ''}" 
+                                   onclick="handleTrackedDownload(event, '${edit.mp3}', '${escapeHtml(mp3Filename)}', '${escapeHtml(trackName)}')">
+                                   MP3 ${mp3Downloaded ? '✓' : ''}
+                                </a>
+                                <a href="${edit.wav}" class="dl-btn dl-btn-wav ${wavDownloaded ? 'downloaded' : ''}" 
+                                   onclick="handleTrackedDownload(event, '${edit.wav}', '${escapeHtml(wavFilename)}', '${escapeHtml(trackName)}')">
+                                   WAV ${wavDownloaded ? '✓' : ''}
+                                </a>
                             </div>
                         </div>
                     `;
                 }).join('');
 
+                // Build status badge and download all button
+                const statusBadge = isFullyDownloaded 
+                    ? '<span class="track-status-badge completed"><i data-lucide="check-circle"></i> Completed</span>'
+                    : `<span class="track-status-badge ready"><i data-lucide="download"></i> ${trackData.downloaded}/${trackData.total} downloaded</span>`;
+                
+                const downloadAllBtn = isFullyDownloaded 
+                    ? ''
+                    : `<button class="btn btn-primary btn-download-all" onclick="downloadAllForTrack('${escapeHtml(trackName)}')">
+                         <i data-lucide="download"></i> Download All
+                       </button>`;
+
                 card.innerHTML = `
                     <div class="track-header">
-                        <div class="track-icon"><i data-lucide="disc-3"></i></div>
+                        <div class="track-icon ${isFullyDownloaded ? 'completed' : 'ready'}">
+                            <i data-lucide="${isFullyDownloaded ? 'check-circle' : 'disc-3'}"></i>
+                        </div>
                         <div class="track-info">
                             <div class="track-name">${escapeHtml(track.original)}</div>
-                            <div class="track-meta">${track.edits.length} versions</div>
+                            <div class="track-meta">${track.edits.length} versions · ${statusBadge}</div>
                         </div>
+                        ${downloadAllBtn}
                     </div>
+                    ${!isFullyDownloaded ? `
+                        <div class="track-download-progress">
+                            <div class="track-download-progress-bar" style="width: ${downloadProgress}%"></div>
+                        </div>
+                    ` : ''}
                     <div class="track-edits">${editsHtml}</div>
                 `;
                 
@@ -2206,6 +2490,7 @@
 
             lucide.createIcons();
             resultsSection.classList.add('active');
+            updateFullTrackListUI();
         }
 
         function resetForNewUpload() {
@@ -2354,8 +2639,8 @@
             // Update total count
             document.getElementById('totalTrackCount').textContent = entries.length;
             
-            // Calculate status counts (include 'uploaded' as uploading for display)
-            const counts = { selected: 0, uploading: 0, uploaded: 0, waiting: 0, processing: 0, completed: 0, failed: 0, skipped: 0 };
+            // Calculate status counts (include 'uploaded' as uploading, 'ready_for_download' as separate)
+            const counts = { selected: 0, uploading: 0, uploaded: 0, waiting: 0, processing: 0, ready_for_download: 0, completed: 0, failed: 0, skipped: 0 };
             entries.forEach(([_, info]) => {
                 if (counts[info.status] !== undefined) counts[info.status]++;
             });
@@ -2367,6 +2652,7 @@
             const completedBadge = document.getElementById('completedBadge');
             const failedBadge = document.getElementById('failedBadge');
             const skippedBadge = document.getElementById('skippedBadge');
+            const readyBadge = document.getElementById('readyBadge');
             
             const uploadingTotal = counts.selected + counts.uploading + counts.uploaded;
             uploadingBadge.style.display = uploadingTotal > 0 ? 'inline-flex' : 'none';
@@ -2377,6 +2663,12 @@
             
             waitingBadge.style.display = counts.waiting > 0 ? 'inline-flex' : 'none';
             document.getElementById('waitingCount').textContent = counts.waiting;
+            
+            // Ready for download badge (new!)
+            if (readyBadge) {
+                readyBadge.style.display = counts.ready_for_download > 0 ? 'inline-flex' : 'none';
+                document.getElementById('readyCount').textContent = counts.ready_for_download;
+            }
             
             completedBadge.style.display = counts.completed > 0 ? 'inline-flex' : 'none';
             document.getElementById('completedCount').textContent = counts.completed;
@@ -2400,6 +2692,7 @@
                 uploaded: [],
                 selected: [],
                 waiting: [],
+                ready_for_download: [],
                 completed: [],
                 failed: [],
                 skipped: []
@@ -2456,6 +2749,17 @@
                 });
                 if (groups.waiting.length > MAX_DISPLAY_PER_SECTION) {
                     html += `<div class="track-list-item" style="justify-content:center;color:var(--text-muted);">+${groups.waiting.length - MAX_DISPLAY_PER_SECTION} more in queue...</div>`;
+                }
+            }
+            
+            // Ready for download tracks (NEW - between waiting and completed)
+            if (groups.ready_for_download.length > 0) {
+                html += `<div class="track-list-section-header" style="color: var(--warning);">📥 Ready for Download (${groups.ready_for_download.length})</div>`;
+                groups.ready_for_download.slice(0, MAX_DISPLAY_PER_SECTION).forEach(track => {
+                    html += renderTrackItem(track);
+                });
+                if (groups.ready_for_download.length > MAX_DISPLAY_PER_SECTION) {
+                    html += `<div class="track-list-item" style="justify-content:center;color:var(--text-muted);">+${groups.ready_for_download.length - MAX_DISPLAY_PER_SECTION} more ready...</div>`;
                 }
             }
             
@@ -2516,10 +2820,15 @@
                     statusLabel = worker ? `W${worker}` : 'Processing';
                     showProgress = true;
                     break;
+                case 'ready_for_download':
+                    checkboxIcon = '<i data-lucide="download"></i>';
+                    checkboxClass = 'ready_for_download';
+                    statusLabel = 'Ready to Download';
+                    break;
                 case 'completed':
                     checkboxIcon = '<i data-lucide="check"></i>';
                     checkboxClass = 'checked';
-                    statusLabel = 'Done';
+                    statusLabel = 'Downloaded ✓';
                     break;
                 case 'failed':
                     checkboxIcon = '<i data-lucide="alert-circle"></i>';
@@ -2590,7 +2899,8 @@
                 }
             });
             
-            // Mark completed tracks
+            // Mark tracks that finished processing as "ready_for_download" (not "completed")
+            // They only become "completed" after ALL files are downloaded
             completedTracks.forEach(trackName => {
                 // Find matching track (may have different key)
                 const matchingKey = Object.keys(allTracks).find(key => 
@@ -2600,28 +2910,43 @@
                 );
                 
                 if (matchingKey && !failedFilenames.has(matchingKey)) {
-                    allTracks[matchingKey].status = 'completed';
+                    // Check if all files have been downloaded for this track
+                    const trackData = trackDownloads[trackName];
+                    if (trackData && trackData.downloaded === trackData.total) {
+                        // All files downloaded - mark as completed
+                        allTracks[matchingKey].status = 'completed';
+                    } else {
+                        // Still has files to download - mark as ready_for_download
+                        allTracks[matchingKey].status = 'ready_for_download';
+                    }
                     allTracks[matchingKey].progress = 100;
                 }
             });
             
-            // Remove tracks that are no longer in queue and not completed/uploading/failed
+            // Remove tracks that are no longer in queue and not completed/uploading/failed/ready_for_download
             Object.keys(allTracks).forEach(filename => {
                 const track = allTracks[filename];
                 if (!queueFilenames.has(filename) && 
                     !failedFilenames.has(filename) &&
                     track.status !== 'completed' && 
+                    track.status !== 'ready_for_download' &&
                     track.status !== 'uploading' &&
                     track.status !== 'selected' &&
                     track.status !== 'failed') {
-                    // Track finished or was removed - check if completed
-                    const isCompleted = completedTracks.some(name => 
+                    // Track finished or was removed - check if in results
+                    const isInResults = completedTracks.some(name => 
                         filename === name || 
                         filename.replace(/\.mp3$/i, '') === name ||
                         name.includes(filename.replace(/\.mp3$/i, ''))
                     );
-                    if (isCompleted) {
-                        allTracks[filename].status = 'completed';
+                    if (isInResults) {
+                        // Check download status
+                        const trackData = trackDownloads[filename.replace(/\.mp3$/i, '')];
+                        if (trackData && trackData.downloaded === trackData.total) {
+                            allTracks[filename].status = 'completed';
+                        } else {
+                            allTracks[filename].status = 'ready_for_download';
+                        }
                     }
                 }
             });

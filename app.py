@@ -69,6 +69,98 @@ DELETION_DELAY_MINUTES = int(os.environ.get('DELETION_DELAY_MINUTES', 300))  # 5
 MAX_PENDING_TRACKS = int(os.environ.get('MAX_PENDING_TRACKS', 1500))
 PENDING_WARNING_THRESHOLD = int(os.environ.get('PENDING_WARNING_THRESHOLD', 1000))
 
+# =============================================================================
+# SEQUENTIAL PROCESSING MODE - Track individual file downloads
+# =============================================================================
+# Structure: { "Track Name": {"files": {"filename.mp3": False, "filename.wav": True, ...}, "all_downloaded": False} }
+# Each file is marked True when downloaded, track is "completed" only when all files downloaded
+track_download_status = {}
+track_download_status_lock = Lock()
+
+# Current track being processed in sequential mode
+current_processing_track = None
+current_processing_track_lock = Lock()
+
+# Sequential mode flag - when True, process one track at a time and wait for downloads
+SEQUENTIAL_MODE = True  # Enabled by default for the new workflow
+
+def register_track_files(track_name, file_list):
+    """Register all files for a track that need to be downloaded."""
+    with track_download_status_lock:
+        track_download_status[track_name] = {
+            'files': {f: False for f in file_list},
+            'all_downloaded': False,
+            'created_at': time.time()
+        }
+        print(f"📋 Registered {len(file_list)} files for download: {track_name}")
+        for f in file_list:
+            print(f"   - {f}")
+
+def mark_file_downloaded(track_name, filename):
+    """Mark a specific file as downloaded. Returns True if all files for track are now downloaded."""
+    with track_download_status_lock:
+        if track_name not in track_download_status:
+            print(f"⚠️ Track '{track_name}' not found in download status")
+            return False
+        
+        # Find the file (may need to match partial name)
+        files = track_download_status[track_name]['files']
+        matched = False
+        for f in files:
+            if filename in f or f in filename or os.path.basename(f) == os.path.basename(filename):
+                files[f] = True
+                matched = True
+                print(f"✅ Marked as downloaded: {f}")
+                break
+        
+        if not matched:
+            print(f"⚠️ File '{filename}' not found in track '{track_name}'")
+            return False
+        
+        # Check if all files are downloaded
+        all_downloaded = all(files.values())
+        track_download_status[track_name]['all_downloaded'] = all_downloaded
+        
+        if all_downloaded:
+            print(f"🎉 All files downloaded for: {track_name}")
+        else:
+            remaining = sum(1 for v in files.values() if not v)
+            print(f"📥 {remaining} files remaining for: {track_name}")
+        
+        return all_downloaded
+
+def get_track_download_status(track_name):
+    """Get download status for a specific track."""
+    with track_download_status_lock:
+        if track_name in track_download_status:
+            return track_download_status[track_name].copy()
+        return None
+
+def is_track_fully_downloaded(track_name):
+    """Check if all files for a track have been downloaded."""
+    with track_download_status_lock:
+        if track_name not in track_download_status:
+            return False
+        return track_download_status[track_name]['all_downloaded']
+
+def get_pending_downloads_for_track(track_name):
+    """Get list of files not yet downloaded for a track."""
+    with track_download_status_lock:
+        if track_name not in track_download_status:
+            return []
+        files = track_download_status[track_name]['files']
+        return [f for f, downloaded in files.items() if not downloaded]
+
+def cleanup_track_after_downloads(track_name):
+    """Delete track files after all versions have been downloaded."""
+    with track_download_status_lock:
+        if track_name in track_download_status:
+            del track_download_status[track_name]
+    
+    # Trigger the actual file deletion
+    confirm_track_download(track_name)
+    print(f"🗑️ Cleaned up track after full download: {track_name}")
+
 def get_pending_tracks_count():
     """Get the number of tracks pending download confirmation."""
     with pending_downloads_lock:
@@ -95,14 +187,17 @@ def check_pending_tracks_warning():
         }
     return {'warning': False, 'count': count}
 
-def track_file_for_pending_download(track_name, original_path, num_files=6):
-    """Register a track as pending download - files will stay until track.idbyrivoli.com confirms download."""
+def track_file_for_pending_download(track_name, original_path, num_files=6, file_list=None):
+    """
+    Register a track as pending download - files will stay until track.idbyrivoli.com confirms download.
+    If file_list is provided, also register for sequential download tracking.
+    """
     with pending_downloads_lock:
         # Also track the htdemucs intermediate folder
         htdemucs_dir = os.path.join(OUTPUT_FOLDER, 'htdemucs', track_name)
         pending_downloads[track_name] = {
             'files_total': num_files,
-            'files': [],  # Will be populated with file paths
+            'files': file_list or [],  # Will be populated with file paths
             'original_path': original_path,
             'processed_dir': os.path.join(PROCESSED_FOLDER, track_name),
             'htdemucs_dir': htdemucs_dir,
@@ -116,11 +211,15 @@ def track_file_for_pending_download(track_name, original_path, num_files=6):
         print(f"📝 Files available: {num_files}")
         print(f"📝 Original: {original_path}")
         print(f"📝 Processed dir: {PROCESSED_FOLDER}/{track_name}")
-        print(f"📝 Status: AWAITING download from track.idbyrivoli.com")
+        print(f"📝 Status: AWAITING download")
         print(f"📝 Total pending tracks: {pending_count}")
         if pending_count >= PENDING_WARNING_THRESHOLD:
             print(f"📝 ⚠️ WARNING: {pending_count} tracks pending (threshold: {PENDING_WARNING_THRESHOLD})")
         print(f"📝 ════════════════════════════════════════════════")
+    
+    # SEQUENTIAL MODE: Also register for individual file download tracking
+    if SEQUENTIAL_MODE and file_list:
+        register_track_files(track_name, file_list)
 
 def schedule_track_deletion(track_name):
     """
@@ -1397,10 +1496,21 @@ def create_edits(vocals_path, inst_path, original_path, base_output_path, base_f
     else:
         log_message(f"⚠️ Pas de fichier instrumental")
     
-    # Register track as pending download - files stay until track.idbyrivoli.com confirms
+    # Register track as pending download - files stay until all are downloaded
     # Count actual files: each edit has MP3 + WAV = 2 files per edit
     num_files = len(edits) * 2
-    track_file_for_pending_download(metadata_base_name, original_path, num_files)
+    
+    # Build list of all actual file names for sequential download tracking
+    # Each edit has format: {"name": "Track - Main", "mp3": "/download_file?path=...", "wav": "/download_file?path=..."}
+    file_list = []
+    for edit in edits:
+        # Extract actual file names from the edit
+        # The format is "{base_name} - {suffix}.mp3" and "{base_name} - {suffix}.wav"
+        edit_name = edit['name']
+        file_list.append(f"{edit_name}.mp3")
+        file_list.append(f"{edit_name}.wav")
+    
+    track_file_for_pending_download(metadata_base_name, original_path, num_files, file_list)
 
     return edits
 
@@ -3135,8 +3245,46 @@ def download_file():
     if track_name:
         log_file_download(track_name, filepath)
     
-    # DELETE FILE AFTER DOWNLOAD if enabled (to prevent disk filling up)
-    if DELETE_AFTER_DOWNLOAD:
+    # ==========================================================================
+    # SEQUENTIAL MODE: Track individual file downloads
+    # Delete track ONLY after ALL versions (MP3 + WAV) have been downloaded
+    # ==========================================================================
+    if SEQUENTIAL_MODE and track_name:
+        all_done = mark_file_downloaded(track_name, download_filename)
+        
+        # Add download status to response headers for frontend tracking
+        remaining = get_pending_downloads_for_track(track_name)
+        response.headers['X-Files-Remaining'] = str(len(remaining))
+        response.headers['X-All-Downloaded'] = 'true' if all_done else 'false'
+        response.headers['X-Track-Name'] = track_name
+        
+        if all_done:
+            # ALL files for this track have been downloaded - cleanup now!
+            print(f"   🎉 ALL FILES DOWNLOADED for '{track_name}' - cleaning up...")
+            try:
+                # Delete the entire track folder
+                track_folder = os.path.join(PROCESSED_FOLDER, track_name)
+                if os.path.exists(track_folder):
+                    shutil.rmtree(track_folder)
+                    print(f"   🗑️ Deleted track folder: {track_folder}")
+                
+                # Clean up htdemucs intermediate files
+                htdemucs_folder = os.path.join(OUTPUT_FOLDER, 'htdemucs', track_name)
+                if os.path.exists(htdemucs_folder):
+                    shutil.rmtree(htdemucs_folder)
+                    print(f"   🗑️ Deleted htdemucs folder: {htdemucs_folder}")
+                
+                # Remove from pending downloads tracker
+                cleanup_track_after_downloads(track_name)
+                
+                log_message(f"✅ Track fully downloaded and cleaned: {track_name}")
+            except Exception as e:
+                print(f"   ⚠️ Cleanup error: {e}")
+        else:
+            print(f"   📥 {len(remaining)} files still pending for '{track_name}'")
+    
+    # Legacy DELETE_AFTER_DOWNLOAD mode (individual file deletion)
+    elif DELETE_AFTER_DOWNLOAD and not SEQUENTIAL_MODE:
         try:
             # Delete the specific file that was downloaded
             os.unlink(filepath)
@@ -3227,6 +3375,54 @@ def confirm_download():
             'error': f"Track '{track_name}' not found in pending downloads",
             'pending_count': get_pending_tracks_count()
         }), 404
+
+
+@app.route('/track_download_status')
+def get_track_download_status_endpoint():
+    """
+    Get download status for a specific track in sequential mode.
+    Shows which files have been downloaded and which are still pending.
+    """
+    track_name = request.args.get('track_name')
+    
+    if not track_name:
+        # Return status for all tracks with pending downloads
+        with track_download_status_lock:
+            all_statuses = {}
+            for name, status in track_download_status.items():
+                files = status['files']
+                downloaded = sum(1 for v in files.values() if v)
+                total = len(files)
+                all_statuses[name] = {
+                    'downloaded_count': downloaded,
+                    'total_count': total,
+                    'all_downloaded': status['all_downloaded'],
+                    'pending_files': [f for f, d in files.items() if not d]
+                }
+            return jsonify({
+                'sequential_mode': SEQUENTIAL_MODE,
+                'tracks': all_statuses
+            })
+    
+    # URL decode track name
+    track_name = urllib.parse.unquote(track_name)
+    status = get_track_download_status(track_name)
+    
+    if not status:
+        return jsonify({'error': f"Track '{track_name}' not found"}), 404
+    
+    files = status['files']
+    downloaded = sum(1 for v in files.values() if v)
+    total = len(files)
+    
+    return jsonify({
+        'track_name': track_name,
+        'downloaded_count': downloaded,
+        'total_count': total,
+        'all_downloaded': status['all_downloaded'],
+        'files': {f: 'downloaded' if d else 'pending' for f, d in files.items()},
+        'pending_files': [f for f, d in files.items() if not d]
+    })
 
 
 @app.route('/already_processed')
