@@ -1826,6 +1826,205 @@ def get_optimal_workers():
 NUM_WORKERS = get_optimal_workers()
 print(f"🔧 Configuration: {CPU_COUNT} CPUs détectés → {NUM_WORKERS} workers parallèles")
 
+# =============================================================================
+# BATCH PROCESSING: Process 200, wait 30min, delete pending, loop
+# =============================================================================
+BATCH_SIZE = int(os.environ.get('BATCH_SIZE', 200))  # Process this many tracks before pause
+BATCH_WAIT_MINUTES = int(os.environ.get('BATCH_WAIT_MINUTES', 30))  # Wait this long between batches
+BATCH_MODE_ENABLED = os.environ.get('BATCH_MODE', 'true').lower() == 'true'  # Enable/disable batch mode
+
+batch_processed_count = 0
+batch_lock = Lock()
+batch_paused = False
+batch_pause_event = threading.Event()
+batch_pause_event.set()  # Start unpaused
+
+def increment_batch_count():
+    """Increment the batch counter and check if we need to pause."""
+    global batch_processed_count, batch_paused
+    
+    if not BATCH_MODE_ENABLED:
+        return
+    
+    with batch_lock:
+        batch_processed_count += 1
+        count = batch_processed_count
+        
+        print(f"📊 Batch progress: {count}/{BATCH_SIZE}")
+        
+        if count >= BATCH_SIZE and not batch_paused:
+            batch_paused = True
+            batch_pause_event.clear()  # Pause workers
+            
+            # Start the batch pause thread
+            pause_thread = threading.Thread(target=batch_pause_cycle, daemon=True)
+            pause_thread.start()
+
+def batch_pause_cycle():
+    """Pause for 30 minutes, delete all pending, then resume."""
+    global batch_processed_count, batch_paused
+    
+    print(f"")
+    print(f"⏸️ ════════════════════════════════════════════════")
+    print(f"⏸️ BATCH LIMIT REACHED: {BATCH_SIZE} tracks processed")
+    print(f"⏸️ Pausing for {BATCH_WAIT_MINUTES} minutes...")
+    print(f"⏸️ ════════════════════════════════════════════════")
+    
+    log_message(f"⏸️ Batch de {BATCH_SIZE} tracks terminé - Pause de {BATCH_WAIT_MINUTES}min")
+    
+    # Wait for BATCH_WAIT_MINUTES
+    time.sleep(BATCH_WAIT_MINUTES * 60)
+    
+    print(f"")
+    print(f"🗑️ ════════════════════════════════════════════════")
+    print(f"🗑️ BATCH CLEANUP: Deleting all pending tracks...")
+    print(f"🗑️ ════════════════════════════════════════════════")
+    
+    log_message(f"🗑️ Nettoyage batch: suppression des tracks en attente...")
+    
+    # Delete all pending tracks from both tracking systems
+    deleted_count = 0
+    
+    # 1. Clean up track_download_status (sequential mode)
+    with track_download_status_lock:
+        tracks_to_cleanup = list(track_download_status.keys())
+    
+    for track_name in tracks_to_cleanup:
+        try:
+            cleanup_track_after_downloads(track_name)
+            deleted_count += 1
+        except Exception as e:
+            print(f"   ⚠️ Error cleaning {track_name}: {e}")
+    
+    # 2. Clean up pending_downloads (legacy mode)
+    with pending_downloads_lock:
+        pending_tracks = list(pending_downloads.keys())
+    
+    for track_name in pending_tracks:
+        try:
+            confirm_track_download(track_name, add_to_logs=False)
+            deleted_count += 1
+        except Exception as e:
+            print(f"   ⚠️ Error cleaning {track_name}: {e}")
+    
+    # 3. Clean up processed folder directly
+    try:
+        for item in os.listdir(PROCESSED_FOLDER):
+            item_path = os.path.join(PROCESSED_FOLDER, item)
+            if os.path.isdir(item_path):
+                shutil.rmtree(item_path)
+                print(f"   🗑️ Deleted: {item}")
+    except Exception as e:
+        print(f"   ⚠️ Error cleaning processed folder: {e}")
+    
+    print(f"")
+    print(f"✅ ════════════════════════════════════════════════")
+    print(f"✅ BATCH CLEANUP COMPLETE: {deleted_count} tracks deleted")
+    print(f"✅ Resuming processing...")
+    print(f"✅ ════════════════════════════════════════════════")
+    
+    log_message(f"✅ Nettoyage terminé: {deleted_count} tracks supprimées - Reprise du traitement")
+    
+    # Reset batch counter and resume
+    with batch_lock:
+        batch_processed_count = 0
+        batch_paused = False
+        batch_pause_event.set()  # Resume workers
+
+def wait_for_batch_resume():
+    """Called by workers to wait if batch is paused."""
+    if BATCH_MODE_ENABLED:
+        batch_pause_event.wait()  # Blocks if paused
+
+print(f"📦 Batch mode: {'ENABLED' if BATCH_MODE_ENABLED else 'DISABLED'} (size={BATCH_SIZE}, wait={BATCH_WAIT_MINUTES}min)")
+
+# =============================================================================
+# DELAYED DELETION: Delete downloaded files after X minutes
+# =============================================================================
+DELAYED_DELETE_MINUTES = int(os.environ.get('DELAYED_DELETE_MINUTES', 5))  # Delete files 5 min after download
+DELAYED_DELETE_ENABLED = os.environ.get('DELAYED_DELETE', 'true').lower() == 'true'
+
+# Track scheduled deletions to avoid duplicates
+scheduled_deletions = {}
+scheduled_deletions_lock = Lock()
+
+def schedule_track_deletion(track_name, delay_minutes=None):
+    """Schedule a track folder for deletion after delay_minutes."""
+    if not DELAYED_DELETE_ENABLED:
+        return
+    
+    if delay_minutes is None:
+        delay_minutes = DELAYED_DELETE_MINUTES
+    
+    with scheduled_deletions_lock:
+        if track_name in scheduled_deletions:
+            print(f"   ⏰ Deletion already scheduled for '{track_name}'")
+            return
+        scheduled_deletions[track_name] = time.time()
+    
+    print(f"   ⏰ Scheduling deletion of '{track_name}' in {delay_minutes} minutes")
+    
+    # Start deletion timer thread
+    timer_thread = threading.Thread(
+        target=delayed_delete_track,
+        args=(track_name, delay_minutes),
+        daemon=True
+    )
+    timer_thread.start()
+
+def delayed_delete_track(track_name, delay_minutes):
+    """Wait for delay then delete the track folder."""
+    delay_seconds = delay_minutes * 60
+    
+    print(f"⏰ [{track_name}] Will be deleted in {delay_minutes} min ({delay_seconds}s)")
+    time.sleep(delay_seconds)
+    
+    print(f"")
+    print(f"🗑️ ════════════════════════════════════════════════")
+    print(f"🗑️ DELAYED DELETE: '{track_name}' (after {delay_minutes}min)")
+    print(f"🗑️ ════════════════════════════════════════════════")
+    
+    try:
+        # Delete the track folder from processed
+        track_folder = os.path.join(PROCESSED_FOLDER, track_name)
+        if os.path.exists(track_folder):
+            shutil.rmtree(track_folder)
+            print(f"   🗑️ Deleted processed folder: {track_folder}")
+        else:
+            print(f"   ℹ️ Processed folder already deleted: {track_folder}")
+        
+        # Delete htdemucs intermediate files
+        htdemucs_folder = os.path.join(OUTPUT_FOLDER, 'htdemucs', track_name)
+        if os.path.exists(htdemucs_folder):
+            shutil.rmtree(htdemucs_folder)
+            print(f"   🗑️ Deleted htdemucs folder: {htdemucs_folder}")
+        
+        # Clean up from tracking systems
+        try:
+            cleanup_track_after_downloads(track_name)
+        except:
+            pass
+        
+        try:
+            with pending_downloads_lock:
+                if track_name in pending_downloads:
+                    del pending_downloads[track_name]
+        except:
+            pass
+        
+        log_message(f"🗑️ Deleted '{track_name}' after {delay_minutes}min delay")
+        
+    except Exception as e:
+        print(f"   ⚠️ Error deleting '{track_name}': {e}")
+    
+    finally:
+        # Remove from scheduled deletions
+        with scheduled_deletions_lock:
+            if track_name in scheduled_deletions:
+                del scheduled_deletions[track_name]
+
+print(f"⏰ Delayed delete: {'ENABLED' if DELAYED_DELETE_ENABLED else 'DISABLED'} ({DELAYED_DELETE_MINUTES}min after download)")
+
 # Global Queue for processing tracks
 track_queue = queue.Queue()
 
@@ -1880,6 +2079,9 @@ def get_queue_items_list():
 def worker(worker_id):
     while True:
         try:
+            # Wait if batch is paused
+            wait_for_batch_resume()
+            
             queue_item = track_queue.get()
             if queue_item is None:
                 break
@@ -1951,6 +2153,9 @@ def worker(worker_id):
             if success:
                 # Remove from tracker when done successfully
                 remove_from_queue_tracker(filename)
+                
+                # Increment batch counter (may trigger pause after BATCH_SIZE tracks)
+                increment_batch_count()
             else:
                 # Keep in tracker as failed - don't remove
                 log_message(f"❌ [{session_id}] Worker {worker_id}: Échec pour {filename}: {error_msg}", session_id)
@@ -3247,6 +3452,12 @@ def download_file():
         log_file_download(track_name, filepath)
     
     # ==========================================================================
+    # DELAYED DELETE: Schedule track deletion after X minutes
+    # ==========================================================================
+    if DELAYED_DELETE_ENABLED and track_name:
+        schedule_track_deletion(track_name)
+    
+    # ==========================================================================
     # SEQUENTIAL MODE: Track individual file downloads
     # Delete track ONLY after ALL versions (MP3 + WAV) have been downloaded
     # ==========================================================================
@@ -3580,6 +3791,113 @@ def list_files():
         if os.path.isdir(subdir_path):
             result[subdir] = os.listdir(subdir_path)
     return jsonify(result)
+
+# =============================================================================
+# BATCH PROCESSING ROUTES
+# =============================================================================
+
+@app.route('/batch_status')
+def get_batch_status():
+    """Get the current batch processing status."""
+    with batch_lock:
+        return jsonify({
+            'enabled': BATCH_MODE_ENABLED,
+            'batch_size': BATCH_SIZE,
+            'wait_minutes': BATCH_WAIT_MINUTES,
+            'processed_count': batch_processed_count,
+            'remaining_until_pause': max(0, BATCH_SIZE - batch_processed_count),
+            'is_paused': batch_paused,
+            'queue_size': track_queue.qsize(),
+            'pending_downloads': get_pending_tracks_count(),
+            'sequential_tracks': len(track_download_status)
+        })
+
+@app.route('/batch_cleanup', methods=['POST'])
+def manual_batch_cleanup():
+    """Manually trigger batch cleanup (delete all pending tracks)."""
+    log_message(f"🗑️ Manual batch cleanup triggered")
+    
+    deleted_count = 0
+    
+    # 1. Clean up track_download_status (sequential mode)
+    with track_download_status_lock:
+        tracks_to_cleanup = list(track_download_status.keys())
+    
+    for track_name in tracks_to_cleanup:
+        try:
+            cleanup_track_after_downloads(track_name)
+            deleted_count += 1
+        except Exception as e:
+            print(f"   ⚠️ Error cleaning {track_name}: {e}")
+    
+    # 2. Clean up pending_downloads (legacy mode)
+    with pending_downloads_lock:
+        pending_tracks = list(pending_downloads.keys())
+    
+    for track_name in pending_tracks:
+        try:
+            confirm_track_download(track_name, add_to_logs=False)
+            deleted_count += 1
+        except Exception as e:
+            print(f"   ⚠️ Error cleaning {track_name}: {e}")
+    
+    # 3. Clean up processed folder directly
+    try:
+        for item in os.listdir(PROCESSED_FOLDER):
+            item_path = os.path.join(PROCESSED_FOLDER, item)
+            if os.path.isdir(item_path):
+                shutil.rmtree(item_path)
+                print(f"   🗑️ Deleted: {item}")
+    except Exception as e:
+        print(f"   ⚠️ Error cleaning processed folder: {e}")
+    
+    log_message(f"✅ Manual cleanup complete: {deleted_count} tracks deleted")
+    
+    return jsonify({
+        'success': True,
+        'deleted_count': deleted_count,
+        'message': f'Deleted {deleted_count} tracks'
+    })
+
+@app.route('/batch_reset', methods=['POST'])
+def reset_batch_counter():
+    """Reset the batch counter without cleanup."""
+    global batch_processed_count
+    with batch_lock:
+        old_count = batch_processed_count
+        batch_processed_count = 0
+    
+    log_message(f"🔄 Batch counter reset: {old_count} → 0")
+    
+    return jsonify({
+        'success': True,
+        'old_count': old_count,
+        'new_count': 0
+    })
+
+@app.route('/scheduled_deletions')
+def get_scheduled_deletions():
+    """Get list of tracks scheduled for delayed deletion."""
+    with scheduled_deletions_lock:
+        deletions = []
+        current_time = time.time()
+        for track_name, scheduled_time in scheduled_deletions.items():
+            elapsed = current_time - scheduled_time
+            remaining = max(0, (DELAYED_DELETE_MINUTES * 60) - elapsed)
+            deletions.append({
+                'track': track_name,
+                'scheduled_at': scheduled_time,
+                'elapsed_seconds': int(elapsed),
+                'remaining_seconds': int(remaining),
+                'remaining_minutes': round(remaining / 60, 1)
+            })
+    
+    return jsonify({
+        'enabled': DELAYED_DELETE_ENABLED,
+        'delay_minutes': DELAYED_DELETE_MINUTES,
+        'scheduled_count': len(deletions),
+        'scheduled_deletions': deletions
+    })
 
 # =============================================================================
 # UPLOAD HISTORY ROUTES
