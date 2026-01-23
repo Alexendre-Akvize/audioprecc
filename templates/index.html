@@ -1365,8 +1365,9 @@
                                 <div class="upload-icon">
                                     <i data-lucide="music"></i>
                                 </div>
-                                <div class="upload-title">Drop your MP3 track here</div>
-                                <div class="upload-subtitle">🔵 DEV MODE: Generates Extended version only</div>
+                                <div class="upload-title">Drop your audio track here</div>
+                                <div class="upload-subtitle">🔵 DEV MODE: Extended version only</div>
+                                <div class="upload-subtitle" style="margin-top: 4px; font-size: 11px; color: var(--text-muted);">Supported: MP3, WAV, M4A, AAC, FLAC</div>
                                 <div class="upload-actions">
                                     <button type="button" class="btn btn-secondary" onclick="document.getElementById('fileInput').click()">
                                         <i data-lucide="file-audio"></i>
@@ -1377,8 +1378,8 @@
                                         Select Folder
                                     </button>
                                 </div>
-                                <input type="file" id="fileInput" accept=".mp3" multiple>
-                                <input type="file" id="folderInput" webkitdirectory directory multiple>
+                                <input type="file" id="fileInput" accept="audio/*,.mp3,.wav,.m4a,.aac,.flac" multiple>
+                                <input type="file" id="folderInput" accept="audio/*,.mp3,.wav,.m4a,.aac,.flac" webkitdirectory directory multiple>
         </div>
 
                             <div id="fileListSection" style="display: none;">

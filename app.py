@@ -2308,8 +2308,8 @@ def create_extended_version_dev(filepath, filename, session_id='global'):
         log_message(f"🔵 [DEV] Création version Extended pour: {filename}", session_id)
         update_queue_item(filename, progress=5, step='Chargement audio...')
         
-        # Load audio file
-        audio = AudioSegment.from_mp3(filepath)
+        # Load audio file (supports MP3, WAV, M4A, FLAC, etc.)
+        audio = AudioSegment.from_file(filepath)
         duration_sec = len(audio) / 1000.0
         log_message(f"📊 Durée originale: {int(duration_sec//60)}:{int(duration_sec%60):02d}", session_id)
         
