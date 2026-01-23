@@ -972,6 +972,7 @@ def set_public_url():
 
 def send_track_info_to_api(track_data):
     """
+    [DEV BRANCH] This function is DISABLED in dev branch.
     Sends track information to external API endpoint with authentication.
     """
     if not API_ENDPOINT:
@@ -1312,27 +1313,27 @@ def create_edits(vocals_path, inst_path, original_path, base_output_path, base_f
         log_message(f"📥 URL MP3: {full_mp3_url}")
         log_message(f"📥 URL WAV: {full_wav_url}")
         
-        # Prepare and send track info to API (for MP3)
-        track_info_mp3 = {
-            'type': suffix,
-            'format': 'MP3',
-            'name': f"{base_name} - {suffix}",
-            'url': mp3_url
-        }
-        track_data_mp3 = prepare_track_metadata(track_info_mp3, original_path, bpm)
-        if track_data_mp3:
-            send_track_info_to_api(track_data_mp3)
+        # [DEV] API calls disabled - Prepare and send track info to API (for MP3)
+        # track_info_mp3 = {
+        #     'type': suffix,
+        #     'format': 'MP3',
+        #     'name': f"{base_name} - {suffix}",
+        #     'url': mp3_url
+        # }
+        # track_data_mp3 = prepare_track_metadata(track_info_mp3, original_path, bpm)
+        # if track_data_mp3:
+        #     send_track_info_to_api(track_data_mp3)
         
-        # Prepare and send track info to API (for WAV)
-        track_info_wav = {
-            'type': suffix,
-            'format': 'WAV',
-            'name': f"{base_name} - {suffix}",
-            'url': wav_url
-        }
-        track_data_wav = prepare_track_metadata(track_info_wav, original_path, bpm)
-        if track_data_wav:
-            send_track_info_to_api(track_data_wav)
+        # [DEV] API calls disabled - Prepare and send track info to API (for WAV)
+        # track_info_wav = {
+        #     'type': suffix,
+        #     'format': 'WAV',
+        #     'name': f"{base_name} - {suffix}",
+        #     'url': wav_url
+        # }
+        # track_data_wav = prepare_track_metadata(track_info_wav, original_path, bpm)
+        # if track_data_wav:
+        #     send_track_info_to_api(track_data_wav)
         
         return {
             'name': f"{base_name} - {suffix}",
@@ -2185,26 +2186,26 @@ def process_track_without_separation(filepath, filename, track_type, session_id=
         log_message(f"📥 URL MP3: {base_url}{mp3_url}")
         log_message(f"📥 URL WAV: {base_url}{wav_url}")
         
-        # Prepare and send track info to API
-        track_info_mp3 = {
-            'type': suffix,
-            'format': 'MP3',
-            'name': metadata_title,
-            'url': mp3_url
-        }
-        track_data_mp3 = prepare_track_metadata(track_info_mp3, filepath, bpm)
-        if track_data_mp3:
-            send_track_info_to_api(track_data_mp3)
+        # [DEV] API calls disabled - Prepare and send track info to API
+        # track_info_mp3 = {
+        #     'type': suffix,
+        #     'format': 'MP3',
+        #     'name': metadata_title,
+        #     'url': mp3_url
+        # }
+        # track_data_mp3 = prepare_track_metadata(track_info_mp3, filepath, bpm)
+        # if track_data_mp3:
+        #     send_track_info_to_api(track_data_mp3)
         
-        track_info_wav = {
-            'type': suffix,
-            'format': 'WAV',
-            'name': metadata_title,
-            'url': wav_url
-        }
-        track_data_wav = prepare_track_metadata(track_info_wav, filepath, bpm)
-        if track_data_wav:
-            send_track_info_to_api(track_data_wav)
+        # track_info_wav = {
+        #     'type': suffix,
+        #     'format': 'WAV',
+        #     'name': metadata_title,
+        #     'url': wav_url
+        # }
+        # track_data_wav = prepare_track_metadata(track_info_wav, filepath, bpm)
+        # if track_data_wav:
+        #     send_track_info_to_api(track_data_wav)
         
         # Build edit result
         edit = {
