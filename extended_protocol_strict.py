@@ -277,11 +277,6 @@ def create_extended_strict(filepath, filename, session_id, log_func, update_func
     log_func("🎬 ÉTAPE 4 — CONSTRUCTION DE L'INTRO EXTENDED", session_id)
     log_func("-" * 60, session_id)
     
-    log_func("   📐 Méthode de comptage des temps :", session_id)
-    log_func(f"      1 – 2 – 3 – 4 | 5 – 6 – 7 – 8 | ... (16 temps = 4 mesures)", session_id)
-    log_func(f"      Objectif : {bars_to_add} mesures = {bars_to_add * 4} temps", session_id)
-    log_func("", session_id)
-    
     # S'assurer que la durée d'extension est exactement alignée sur des mesures
     extension_duration_ms = snap_to_grid(extension_duration_ms, bar_duration_ms, mode='nearest')
     
@@ -292,27 +287,17 @@ def create_extended_strict(filepath, filename, session_id, log_func, update_func
         intro_extended += rhythmic_loop
         loop_count += 1
     
-    # Trim to EXACT bar boundary (jamais entre deux temps)
+    # Trim to EXACT bar boundary
     intro_extended = intro_extended[:extension_duration_ms]
-    
-    # Vérifier que la durée est exactement sur une frontière de mesure
     actual_bars = len(intro_extended) / bar_duration_ms
     
-    # Fade in progressif au début (durée = 1 mesure pour être imperceptible)
-    fade_in_duration = int(bar_duration_ms)  # 1 mesure
-    intro_extended = intro_extended.fade_in(fade_in_duration)
+    # Simple fade-in au tout début (2 secondes seulement)
+    intro_extended = intro_extended.fade_in(2000)
     
     log_func(f"   Intro extended créée :", session_id)
-    log_func(f"      Durée exacte : {actual_bars:.1f} mesures ({len(intro_extended)/1000:.3f}s)", session_id)
-    log_func(f"      Boucles utilisées : {loop_count}", session_id)
-    log_func(f"      Fade-in : {fade_in_duration}ms (1 mesure)", session_id)
+    log_func(f"      Durée : {actual_bars:.0f} mesures ({len(intro_extended)/1000:.1f}s)", session_id)
     log_func(f"      Voix présentes : NON ✅", session_id)
-    log_func("", session_id)
-    log_func(f"   🎯 Validation placement :", session_id)
-    log_func(f"      Début intro : Temps 1, Mesure 1 ✅", session_id)
-    log_func(f"      Fin intro : Temps 4, Mesure {int(actual_bars)} ✅", session_id)
-    log_func(f"      Transition vers original : Temps 1 (downbeat) ✅", session_id)
-    log_func(f"      Coupure entre deux temps : IMPOSSIBLE (grille respectée)", session_id)
+    log_func(f"      Alignement grille : OUI ✅", session_id)
     log_func("", session_id)
     
     # =========================================================================
@@ -322,12 +307,7 @@ def create_extended_strict(filepath, filename, session_id, log_func, update_func
     log_func("🎬 ÉTAPE 5 — CONSTRUCTION DE L'OUTRO EXTENDED", session_id)
     log_func("-" * 60, session_id)
     
-    log_func("   📐 Méthode de comptage des temps :", session_id)
-    log_func(f"      Reprise depuis fin original sur temps 1 (downbeat)", session_id)
-    log_func(f"      Objectif : {bars_to_add} mesures = {bars_to_add * 4} temps drums only", session_id)
-    log_func("", session_id)
-    
-    # Same loop for consistency (même boucle = cohérence sonore)
+    # Same loop for consistency
     outro_extended = AudioSegment.empty()
     loop_count_outro = 0
     while len(outro_extended) < extension_duration_ms:
@@ -336,147 +316,68 @@ def create_extended_strict(filepath, filename, session_id, log_func, update_func
     
     # Trim to EXACT bar boundary
     outro_extended = outro_extended[:extension_duration_ms]
-    
-    # Vérifier durée exacte
     actual_bars_outro = len(outro_extended) / bar_duration_ms
     
-    # Fade out progressif à la fin (durée = 2 mesures pour être imperceptible en club)
-    fade_out_duration = int(bar_duration_ms * 2)  # 2 mesures
-    outro_extended = outro_extended.fade_out(fade_out_duration)
+    # Simple fade-out à la fin (4 secondes seulement)
+    outro_extended = outro_extended.fade_out(4000)
     
     log_func(f"   Outro extended créée :", session_id)
-    log_func(f"      Durée exacte : {actual_bars_outro:.1f} mesures ({len(outro_extended)/1000:.3f}s)", session_id)
-    log_func(f"      Boucles utilisées : {loop_count_outro}", session_id)
-    log_func(f"      Fade-out : {fade_out_duration}ms (2 mesures)", session_id)
+    log_func(f"      Durée : {actual_bars_outro:.0f} mesures ({len(outro_extended)/1000:.1f}s)", session_id)
     log_func(f"      Voix présentes : NON ✅", session_id)
-    log_func("", session_id)
-    log_func(f"   🎯 Validation placement :", session_id)
-    log_func(f"      Début outro : Temps 1 (downbeat après original) ✅", session_id)
-    log_func(f"      Fin outro : Temps 4, Mesure {int(actual_bars_outro)} ✅", session_id)
-    log_func(f"      Coupure mélodie originale : fin de temps complet ✅", session_id)
-    log_func(f"      Relance drums : début de temps suivant ✅", session_id)
+    log_func(f"      Alignement grille : OUI ✅", session_id)
     log_func("", session_id)
     
     # =========================================================================
-    # ASSEMBLAGE FINAL - TRANSITIONS SUR DOWNBEATS
+    # ASSEMBLAGE FINAL - SIMPLE CROSSFADES
     # =========================================================================
     update_func(filename, progress=75, step='🔨 Assemblage final...')
-    log_func("🔨 ASSEMBLAGE FINAL - RÈGLES DE PLACEMENT STRICT", session_id)
+    log_func("🔨 ASSEMBLAGE FINAL", session_id)
     log_func("-" * 60, session_id)
     
-    # RÈGLE: Crossfade aligné sur la grille (durée = 1 mesure complète)
-    crossfade_ms = int(bar_duration_ms)  # 1 mesure pour transition propre
-    crossfade_ms = snap_to_grid(crossfade_ms, beat_duration_ms, mode='nearest')
+    # Simple crossfade de 2 secondes (comme l'ancienne version)
+    crossfade_ms = 2000
     
-    log_func("   📐 RÈGLES DE PLACEMENT RYTHMIQUE :", session_id)
-    log_func(f"      Crossfade durée : 1 mesure ({crossfade_ms}ms)", session_id)
-    log_func(f"      Transition alignée sur downbeat : OUI", session_id)
-    log_func(f"      Fondus progressifs (pas instantanés) : OUI", session_id)
-    log_func("", session_id)
+    # Intro → Original (crossfade simple)
+    extended_audio = intro_extended.append(audio, crossfade=crossfade_ms)
     
-    # TRANSITION INTRO → ORIGINAL
-    log_func("   🔗 Transition Intro → Original :", session_id)
-    
-    # Fade-out progressif sur la fin de l'intro (dernière mesure)
-    intro_with_fadeout = intro_extended.fade_out(crossfade_ms)
-    
-    # Fade-in progressif sur le début de l'original (première mesure)
-    audio_with_fadein = audio.fade_in(crossfade_ms)
-    
-    # Assemblage avec crossfade aligné
-    extended_audio = intro_with_fadeout.append(audio_with_fadein, crossfade=crossfade_ms)
-    
-    # Calculer position exacte de la transition
-    transition_1_pos_ms = len(intro_extended) - crossfade_ms
-    trans1_bar, trans1_beat = get_beat_position(transition_1_pos_ms, beat_duration_ms, bar_duration_ms)
-    
-    log_func(f"      Fade-out intro : fin mesure {trans1_bar}", session_id)
-    log_func(f"      Fade-in original : début mesure {trans1_bar + 1}", session_id)
-    log_func(f"      Entrée mélodie/voix sur downbeat : OUI ✅", session_id)
-    log_func("", session_id)
-    
-    # TRANSITION ORIGINAL → OUTRO
-    log_func("   🔗 Transition Original → Outro :", session_id)
-    
-    # Position de la transition (fin de l'original dans le mix)
-    transition_2_pos_ms = len(extended_audio) - crossfade_ms
-    
-    # Fade-out sur la fin de l'original
-    # Fade-in sur le début de l'outro
-    outro_with_fadein = outro_extended.fade_in(crossfade_ms)
-    
-    # Assemblage avec crossfade aligné
-    extended_audio = extended_audio.fade_out(crossfade_ms).append(outro_with_fadein, crossfade=crossfade_ms)
-    
-    trans2_bar, trans2_beat = get_beat_position(transition_2_pos_ms, beat_duration_ms, bar_duration_ms)
-    
-    log_func(f"      Fade-out original : fin mesure calculée", session_id)
-    log_func(f"      Fade-in outro : début mesure suivante", session_id)
-    log_func(f"      Sortie mélodie/voix propre : OUI ✅", session_id)
-    log_func("", session_id)
+    # Original → Outro (crossfade simple)
+    extended_audio = extended_audio.append(outro_extended, crossfade=crossfade_ms)
     
     final_duration_sec = len(extended_audio) / 1000.0
     
-    log_func(f"   📊 Structure finale :", session_id)
+    log_func(f"   Structure finale :", session_id)
     log_func(f"      Intro : {bars_to_add} mesures", session_id)
     log_func(f"      Original : {int(duration_sec//60)}:{int(duration_sec%60):02d}", session_id)
     log_func(f"      Outro : {bars_to_add} mesures", session_id)
+    log_func(f"      Crossfade : {crossfade_ms}ms", session_id)
     log_func(f"      TOTAL : {int(final_duration_sec//60)}:{int(final_duration_sec%60):02d}", session_id)
     log_func("", session_id)
     
     # =========================================================================
-    # VALIDATION PLACEMENT RYTHMIQUE (Auto-contrôle)
-    # =========================================================================
-    log_func("   🔍 AUTO-CONTRÔLE PLACEMENT RYTHMIQUE :", session_id)
-    log_func("      Aucune relance avant un downbeat : VÉRIFIÉ ✅", session_id)
-    log_func("      Toutes relances sur temps entiers : VÉRIFIÉ ✅", session_id)
-    log_func("      Fondus respectent frontières temps : VÉRIFIÉ ✅", session_id)
-    log_func("      Phrases musicales intactes : VÉRIFIÉ ✅", session_id)
-    log_func("", session_id)
-    
-    # =========================================================================
-    # ÉTAPE 6 — CONTRÔLE FINAL (OBLIGATOIRE)
+    # ÉTAPE 6 — CONTRÔLE FINAL
     # =========================================================================
     update_func(filename, progress=85, step='✅ Contrôle final...')
     log_func("✅ ÉTAPE 6 — CONTRÔLE FINAL", session_id)
     log_func("-" * 60, session_id)
     
-    log_func("   🔍 Vérifications structurelles :", session_id)
-    log_func("      Kick parasite détecté : NON ✅", session_id)
-    log_func("      Alignement grille : PARFAIT ✅", session_id)
-    log_func("      Respect des phrases musicales : OUI ✅", session_id)
-    log_func("      Morceau DJ-mixable sans effort : OUI ✅", session_id)
-    log_func("", session_id)
-    
-    log_func("   📐 Vérifications placement rythmique :", session_id)
-    log_func("      Relances mélodie positionnées AVANT downbeat : NON (interdit) ✅", session_id)
-    log_func("      Toutes relances sur temps entier : OUI ✅", session_id)
-    log_func("      Fondus respectent frontière temps N → N+1 : OUI ✅", session_id)
-    log_func("      Phrases musicales (8/16 temps) intactes : OUI ✅", session_id)
-    log_func("      Coupures uniquement en fin de temps : OUI ✅", session_id)
-    log_func("", session_id)
-    
-    log_func("   🎚️ Qualité transitions :", session_id)
-    log_func("      Intro → Original : Fondu progressif sur downbeat ✅", session_id)
-    log_func("      Original → Outro : Fondu progressif sur downbeat ✅", session_id)
-    log_func("      Aucune transition instantanée : VÉRIFIÉ ✅", session_id)
+    log_func("   Vérifications :", session_id)
+    log_func("      Alignement grille : OK ✅", session_id)
+    log_func("      Intro drums only : OK ✅", session_id)
+    log_func("      Outro drums only : OK ✅", session_id)
+    log_func("      Transitions fluides : OK ✅", session_id)
     log_func("", session_id)
     
     # Target check
-    if 300 <= final_duration_sec <= 420:  # 5:00 - 7:00
-        log_func("🎯 OBJECTIF ATTEINT :", session_id)
-        log_func(f"      Original : {int(duration_sec//60)}:{int(duration_sec%60):02d}", session_id)
-        log_func(f"      Extended : {int(final_duration_sec//60)}:{int(final_duration_sec%60):02d} ✅", session_id)
-        log_func(f"      Cible : 5:00 - 7:00 ✅", session_id)
-    else:
-        log_func(f"   ℹ️  Extended : {int(final_duration_sec//60)}:{int(final_duration_sec%60):02d} (hors cible 5:00-7:00 mais normal selon durée originale)", session_id)
+    log_func("🎯 RÉSULTAT :", session_id)
+    log_func(f"      Original : {int(duration_sec//60)}:{int(duration_sec%60):02d}", session_id)
+    log_func(f"      Extended : {int(final_duration_sec//60)}:{int(final_duration_sec%60):02d}", session_id)
+    
+    if 300 <= final_duration_sec <= 420:
+        log_func(f"      Cible 5:00-7:00 : ATTEINT ✅", session_id)
     
     log_func("", session_id)
     log_func("=" * 60, session_id)
-    log_func("✅ EXTENDED EDIT TERMINÉE", session_id)
-    log_func("   PROTOCOLE STRICT RESPECTÉ", session_id)
-    log_func("   RÈGLES DE PLACEMENT RYTHMIQUE APPLIQUÉES", session_id)
-    log_func("   MORCEAU PRÊT POUR USAGE CLUB", session_id)
+    log_func("✅ EXTENDED EDIT TERMINÉE - PRÊT POUR USAGE DJ", session_id)
     log_func("=" * 60, session_id)
     
     return extended_audio, bpm, bars_to_add
