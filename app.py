@@ -11,7 +11,7 @@ from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_from_directory, abort, send_file, session, Response
 from mutagen.mp3 import MP3
 from mutagen.easyid3 import EasyID3
-from mutagen.id3 import ID3, TIT2, TPE1, APIC, TALB, TDRC, TRCK, TCON, TBPM, TSRC, TLEN, TPUB, WOAR, WXXX, TXXX
+from mutagen.id3 import ID3, TIT2, TPE1, APIC, TALB, TDRC, TRCK, TCON, TBPM, TSRC, TLEN, TPUB, WOAR, WXXX, TXXX, COMM
 from pydub import AudioSegment
 import librosa
 import numpy as np
@@ -22,10 +22,16 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'idbyrivoli-secret-key-2024')
 
 # ============================================================================
-# DEV MODE - Simplified workflow: Upload → Extended → Download
+# DEV MODE - Simplified workflow: Upload → Process → Download
 # ============================================================================
 DEV_MODE = True
-print("🔵 DEV MODE ACTIVÉ - Workflow simplifié: Upload → Extended → Download")
+
+# DEV_ACTION: Choose the processing mode
+# - "extended" : Create extended version (intro + outro loops)
+# - "melody"   : Isolate melody (harmonic) vs drums (percussive)
+DEV_ACTION = "melody"  # <-- CHANGE THIS TO SWITCH MODE
+
+print(f"🔵 DEV MODE ACTIVÉ - Action: {DEV_ACTION.upper()}")
 
 # Configure Flask for large batch uploads (1000+ tracks)
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max per request
@@ -1844,14 +1850,21 @@ def worker(worker_id):
             print(f"🔄 Worker {worker_id} traite: {filename}" + (" (RETRY)" if is_retry else ""))
             
             # =================================================================
-            # DEV MODE: Use simplified Extended-only workflow
+            # DEV MODE: Use simplified workflow based on DEV_ACTION
             # =================================================================
             if DEV_MODE:
-                success, output_path, error_msg = create_extended_version_dev(filepath, filename, session_id)
+                if DEV_ACTION == "melody":
+                    # Isoler la mélodie (HPSS: harmonique vs percussif)
+                    success, output_path, error_msg = isolate_melody_dev(filepath, filename, session_id)
+                    action_label = 'Mélodie'
+                else:
+                    # Extended version (intro + outro loops)
+                    success, output_path, error_msg = create_extended_version_dev(filepath, filename, session_id)
+                    action_label = 'Extended'
                 
                 # Update upload history status for DEV mode
                 if success:
-                    update_upload_history_status(filename, 'completed', 'Extended')
+                    update_upload_history_status(filename, 'completed', action_label)
                 else:
                     update_upload_history_status(filename, 'failed', error=error_msg)
             else:
@@ -2286,6 +2299,214 @@ def remove_failed_file(session_id, filename):
     """Remove a file from the failed files list (e.g., after successful retry)."""
     current_status = get_job_status(session_id)
     current_status['failed_files'] = [f for f in current_status['failed_files'] if f['filename'] != filename]
+
+# ============================================================================
+# [DEV] ISOLER LA MÉLODIE - Test de compréhension harmonique
+# ============================================================================
+def isolate_melody_dev(filepath, filename, session_id='global'):
+    """
+    [DEV MODE] Isoler la mélodie d'un morceau.
+    
+    Ce que je comprends par "mélodie" :
+    - Les éléments HARMONIQUES du morceau (tout ce qui a une hauteur tonale)
+    - Synthés, pianos, guitares, cordes, basse mélodique
+    - PAS les drums/percussions (éléments percussifs sans hauteur tonale fixe)
+    - PAS les voix (traitées séparément)
+    
+    Méthode utilisée: HPSS (Harmonic-Percussive Source Separation)
+    - Sépare le signal en composante harmonique vs percussive
+    - La composante harmonique = la "mélodie" au sens large
+    
+    Returns: (success: bool, output_path: str or None, error_message: str or None)
+    """
+    try:
+        log_message(f"🎹 [DEV] Isolation de la MÉLODIE pour: {filename}", session_id)
+        update_queue_item(filename, progress=5, step='Chargement audio...')
+        
+        # Load with librosa for analysis
+        y, sr = librosa.load(filepath, sr=44100)
+        duration_sec = len(y) / sr
+        log_message(f"📊 Durée: {int(duration_sec//60)}:{int(duration_sec%60):02d}", session_id)
+        
+        # =====================================================================
+        # STEP 1: HARMONIC-PERCUSSIVE SOURCE SEPARATION (HPSS)
+        # =====================================================================
+        update_queue_item(filename, progress=20, step='Séparation harmonique/percussive...')
+        log_message(f"🔬 Analyse HPSS (Harmonic-Percussive Source Separation)...", session_id)
+        
+        # HPSS sépare le signal en:
+        # - y_harmonic: composantes harmoniques (mélodie, accords, basse)
+        # - y_percussive: composantes percussives (drums, kicks, snares)
+        y_harmonic, y_percussive = librosa.effects.hpss(y)
+        
+        log_message(f"✅ Séparation HPSS terminée", session_id)
+        log_message(f"   🎹 Harmonique (mélodie): {len(y_harmonic)} samples", session_id)
+        log_message(f"   🥁 Percussif (drums): {len(y_percussive)} samples", session_id)
+        
+        # =====================================================================
+        # STEP 2: ANALYSE DE LA MÉLODIE EXTRAITE
+        # =====================================================================
+        update_queue_item(filename, progress=40, step='Analyse mélodie...')
+        
+        # Calculer l'énergie relative de chaque composante
+        energy_harmonic = np.sum(y_harmonic ** 2)
+        energy_percussive = np.sum(y_percussive ** 2)
+        energy_total = energy_harmonic + energy_percussive
+        
+        ratio_harmonic = (energy_harmonic / energy_total) * 100
+        ratio_percussive = (energy_percussive / energy_total) * 100
+        
+        log_message(f"📊 Répartition énergétique:", session_id)
+        log_message(f"   🎹 Mélodie/Harmonie: {ratio_harmonic:.1f}%", session_id)
+        log_message(f"   🥁 Drums/Percussions: {ratio_percussive:.1f}%", session_id)
+        
+        # Détecter la tonalité (optionnel mais intéressant)
+        try:
+            chroma = librosa.feature.chroma_cqt(y=y_harmonic, sr=sr)
+            chroma_mean = np.mean(chroma, axis=1)
+            notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+            dominant_note = notes[np.argmax(chroma_mean)]
+            log_message(f"   🎵 Note dominante détectée: {dominant_note}", session_id)
+        except Exception as e:
+            log_message(f"   ⚠️ Détection tonalité échouée: {e}", session_id)
+        
+        # =====================================================================
+        # STEP 3: EXPORT DE LA MÉLODIE ISOLÉE
+        # =====================================================================
+        update_queue_item(filename, progress=60, step='Export mélodie...')
+        
+        # Convertir numpy array en AudioSegment
+        # Normaliser entre -1 et 1, puis convertir en int16
+        y_harmonic_normalized = y_harmonic / np.max(np.abs(y_harmonic)) * 0.95
+        y_harmonic_int16 = (y_harmonic_normalized * 32767).astype(np.int16)
+        
+        # Créer AudioSegment depuis les données brutes
+        melody_audio = AudioSegment(
+            y_harmonic_int16.tobytes(),
+            frame_rate=sr,
+            sample_width=2,  # 16 bits = 2 bytes
+            channels=1
+        )
+        
+        # Préparer le dossier de sortie
+        clean_name, _ = clean_filename(filename)
+        track_output_dir = os.path.join(PROCESSED_FOLDER, clean_name)
+        os.makedirs(track_output_dir, exist_ok=True)
+        
+        # Export Mélodie (harmonique)
+        melody_filename = f"{clean_name} - Mélodie (Harmonique).mp3"
+        melody_path = os.path.join(track_output_dir, melody_filename)
+        
+        melody_audio.export(
+            melody_path,
+            format='mp3',
+            bitrate='320k',
+            parameters=['-q:a', '0']
+        )
+        log_message(f"💾 Mélodie exportée: {melody_filename}", session_id)
+        
+        # =====================================================================
+        # STEP 4: EXPORT DES DRUMS/PERCUSSIONS (pour comparaison)
+        # =====================================================================
+        update_queue_item(filename, progress=75, step='Export percussions...')
+        
+        y_percussive_normalized = y_percussive / np.max(np.abs(y_percussive)) * 0.95
+        y_percussive_int16 = (y_percussive_normalized * 32767).astype(np.int16)
+        
+        drums_audio = AudioSegment(
+            y_percussive_int16.tobytes(),
+            frame_rate=sr,
+            sample_width=2,
+            channels=1
+        )
+        
+        drums_filename = f"{clean_name} - Drums (Percussif).mp3"
+        drums_path = os.path.join(track_output_dir, drums_filename)
+        
+        drums_audio.export(
+            drums_path,
+            format='mp3',
+            bitrate='320k',
+            parameters=['-q:a', '0']
+        )
+        log_message(f"💾 Drums exportés: {drums_filename}", session_id)
+        
+        # =====================================================================
+        # STEP 5: MÉTADONNÉES
+        # =====================================================================
+        update_queue_item(filename, progress=85, step='Ajout métadonnées...')
+        
+        try:
+            # Mélodie
+            audio_file = MP3(melody_path, ID3=ID3)
+            if audio_file.tags is None:
+                audio_file.add_tags()
+            audio_file.tags.add(TIT2(encoding=3, text=f"{clean_name} - Mélodie"))
+            audio_file.tags.add(TPE1(encoding=3, text="ID By Rivoli"))
+            audio_file.tags.add(COMM(encoding=3, lang='fra', desc='Info', 
+                text=f"Composante harmonique isolée par HPSS. Ratio: {ratio_harmonic:.1f}%"))
+            audio_file.save()
+            
+            # Drums
+            audio_file = MP3(drums_path, ID3=ID3)
+            if audio_file.tags is None:
+                audio_file.add_tags()
+            audio_file.tags.add(TIT2(encoding=3, text=f"{clean_name} - Drums"))
+            audio_file.tags.add(TPE1(encoding=3, text="ID By Rivoli"))
+            audio_file.tags.add(COMM(encoding=3, lang='fra', desc='Info', 
+                text=f"Composante percussive isolée par HPSS. Ratio: {ratio_percussive:.1f}%"))
+            audio_file.save()
+        except Exception as e:
+            log_message(f"⚠️ Erreur métadonnées: {e}", session_id)
+        
+        # =====================================================================
+        # STEP 6: ENREGISTRER POUR TÉLÉCHARGEMENT
+        # =====================================================================
+        update_queue_item(filename, progress=95, step='Finalisation...')
+        
+        track_file_for_pending_download(clean_name, melody_path, 1)
+        track_file_for_pending_download(clean_name, drums_path, 1)
+        
+        # Build download URLs
+        melody_rel_path = os.path.relpath(melody_path, BASE_DIR)
+        drums_rel_path = os.path.relpath(drums_path, BASE_DIR)
+        melody_url = f"/download_file?path={urllib.parse.quote(melody_rel_path, safe='/')}"
+        drums_url = f"/download_file?path={urllib.parse.quote(drums_rel_path, safe='/')}"
+        
+        log_message(f"✅ Isolation terminée!", session_id)
+        log_message(f"   🎹 Mélodie: {melody_url}", session_id)
+        log_message(f"   🥁 Drums: {drums_url}", session_id)
+        
+        update_queue_item(filename, progress=100, step='Terminé ✅', status='completed')
+        
+        # Add to session results for UI display
+        current_status = get_job_status(session_id)
+        result_data = {
+            'original': clean_name,
+            'edits': [
+                {
+                    'name': f"{clean_name} - Mélodie (Harmonique)",
+                    'mp3': melody_url,
+                    'wav': None
+                },
+                {
+                    'name': f"{clean_name} - Drums (Percussif)",
+                    'mp3': drums_url,
+                    'wav': None
+                }
+            ]
+        }
+        current_status['results'].append(result_data)
+        
+        return True, melody_path, None
+        
+    except Exception as e:
+        error_msg = f"Erreur isolation mélodie: {str(e)}"
+        log_message(f"❌ {error_msg}", session_id)
+        import traceback
+        traceback.print_exc()
+        return False, None, error_msg
+
 
 # Modified process function for SINGLE track with RETRY LOGIC
 def create_extended_version_dev(filepath, filename, session_id='global'):
