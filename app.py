@@ -58,11 +58,11 @@ download_tracker_lock = Lock()
 pending_downloads = {}
 pending_downloads_lock = Lock()
 
-# Scheduled deletions - tracks confirmed for download, waiting 5 minutes before deletion
+# Scheduled deletions - tracks confirmed for download, waiting 5 hours before deletion
 # Structure: { "Track Name": {"scheduled_at": timestamp, "delete_after": timestamp} }
 scheduled_deletions = {}
 scheduled_deletions_lock = Lock()
-DELETION_DELAY_MINUTES = int(os.environ.get('DELETION_DELAY_MINUTES', 5))  # 5 minutes delay after confirm_download
+DELETION_DELAY_MINUTES = int(os.environ.get('DELETION_DELAY_MINUTES', 300))  # 5 hours (300 minutes) delay after confirm_download
 
 # Maximum number of pending tracks before warning (configurable)
 # Set high to support batch uploads of 1000+ tracks
