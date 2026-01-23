@@ -18,6 +18,9 @@ import numpy as np
 import scipy.io.wavfile as wavfile
 import urllib.parse
 
+# Import strict protocol for Extended Edit creation
+from extended_protocol_strict import create_extended_strict
+
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'idbyrivoli-secret-key-2024')
 
@@ -2290,186 +2293,38 @@ def remove_failed_file(session_id, filename):
 # Modified process function for SINGLE track with RETRY LOGIC
 def create_extended_version_dev(filepath, filename, session_id='global'):
     """
-    [DEV MODE] Simplified workflow: Create Extended version only.
+    [DEV MODE] PROTOCOLE STRICT - CRÉATION EXTENDED EDIT DJ
     
-    Specifications:
-    1. Analyze entire track (BPM, duration, structure)
-    2. Extend intro with clean drums/rhythmic loop (no vocals)
-       - If track 0:00-3:30: +16 bars
-       - If track > 3:31: +32 bars
-    3. Extend outro with clean drums/rhythmic loop (no vocals)
-       - Same logic as intro
-    4. Ensure smooth transitions (no voice/melody cuts)
-    5. Target: 2:30-3:30 → 5:00-7:00
+    RÈGLE ABSOLUE: Analyse rythmique et structurelle COMPLÈTE avant toute modification.
+    
+    Étapes:
+    1. ANALYSE COMPLÈTE (BPM, grille, downbeat, phrases musicales)
+    2. VALIDATION DE LA GRILLE (kicks sur temps forts)
+    3. DÉTERMINATION PLAN D'EXTENSION (boucle propre, durée)
+    4. CONSTRUCTION INTRO (drums only, transition propre)
+    5. CONSTRUCTION OUTRO (drums only, pas de voix)
+    6. CONTRÔLE FINAL (grille, phrases, mixabilité)
+    
+    Target: Original 2:30-3:30 → Extended 5:00-7:00
     
     Returns: (success: bool, output_path: str or None, error_message: str or None)
     """
     try:
-        log_message(f"🔵 [DEV] Création version Extended pour: {filename}", session_id)
-        update_queue_item(filename, progress=5, step='Chargement audio...')
+        log_message(f"🔵 [DEV] Création version Extended - PROTOCOLE STRICT", session_id)
+        log_message(f"📁 Fichier: {filename}", session_id)
+        update_queue_item(filename, progress=2, step='Initialisation...')
         
-        # Load audio file (supports MP3, WAV, M4A, FLAC, etc.)
-        audio = AudioSegment.from_file(filepath)
-        duration_sec = len(audio) / 1000.0
-        log_message(f"📊 Durée originale: {int(duration_sec//60)}:{int(duration_sec%60):02d}", session_id)
-        
-        # =====================================================================
-        # STEP 1: ANALYZE TRACK (BPM, Structure)
-        # =====================================================================
-        update_queue_item(filename, progress=10, step='Analyse BPM...')
-        log_message(f"🎵 Analyse du morceau...", session_id)
-        
-        try:
-            y, sr = librosa.load(filepath, sr=44100)
-            
-            # Detect BPM
-            tempo, beats = librosa.beat.beat_track(y=y, sr=sr)
-            bpm = round(tempo)
-            log_message(f"🥁 BPM détecté: {bpm}", session_id)
-            
-            # Calculate bar duration (4 beats per bar in 4/4 time)
-            beat_duration = 60.0 / bpm  # seconds per beat
-            bar_duration = beat_duration * 4  # seconds per bar (4/4 time)
-            
-            # Determine number of bars to add based on original duration
-            if duration_sec <= 210:  # 0:00 - 3:30
-                bars_to_add = 16
-                log_message(f"📏 Durée ≤ 3:30 → Extension de {bars_to_add} mesures", session_id)
-            else:  # > 3:31
-                bars_to_add = 32
-                log_message(f"📏 Durée > 3:30 → Extension de {bars_to_add} mesures", session_id)
-            
-            extension_duration = bar_duration * bars_to_add * 1000  # milliseconds
-            log_message(f"⏱️  Extension: {bars_to_add} mesures = {extension_duration/1000:.1f}s", session_id)
-            
-        except Exception as e:
-            log_message(f"⚠️ Erreur analyse BPM: {e} - Utilisation valeurs par défaut", session_id)
-            bpm = 128
-            bars_to_add = 16
-            bar_duration = (60.0 / bpm) * 4
-            extension_duration = bar_duration * bars_to_add * 1000
-        
-        update_queue_item(filename, progress=20, step='Analyse structure...')
-        
-        # =====================================================================
-        # STEP 2: FIND CLEAN RHYTHMIC LOOP (no vocals)
-        # =====================================================================
-        log_message(f"🔍 Recherche boucle rythmique propre (sans voix)...", session_id)
-        
-        # Search for instrumental section (typically in middle or end)
-        # We'll look for a section with low spectral centroid (less high frequencies = less vocals)
-        try:
-            # Analyze spectral characteristics to find instrumental parts
-            hop_length = 512
-            spectral_centroids = librosa.feature.spectral_centroid(y=y, sr=sr, hop_length=hop_length)[0]
-            
-            # Convert to time segments (1 second windows)
-            window_size = int(sr / hop_length)  # frames per second
-            num_windows = len(spectral_centroids) // window_size
-            
-            segment_scores = []
-            for i in range(num_windows):
-                start_frame = i * window_size
-                end_frame = min((i + 1) * window_size, len(spectral_centroids))
-                segment_centroid = np.mean(spectral_centroids[start_frame:end_frame])
-                segment_scores.append((i, segment_centroid))
-            
-            # Find segments with lower spectral centroid (likely instrumental)
-            # Skip first 10% and last 10% to avoid intro/outro artifacts
-            safe_start = max(1, int(num_windows * 0.1))
-            safe_end = max(safe_start + 1, int(num_windows * 0.9))
-            safe_segments = segment_scores[safe_start:safe_end]
-            
-            if safe_segments:
-                # Sort by centroid (lower = more likely instrumental)
-                safe_segments.sort(key=lambda x: x[1])
-                best_segment_idx = safe_segments[0][0]
-                
-                # Extract loop (aim for 4-8 bars)
-                loop_duration_target = bar_duration * 4  # 4 bars
-                loop_start_ms = best_segment_idx * 1000
-                loop_end_ms = loop_start_ms + (loop_duration_target * 1000)
-                loop_end_ms = min(loop_end_ms, len(audio))
-                
-                rhythmic_loop = audio[loop_start_ms:loop_end_ms]
-                log_message(f"✂️  Boucle extraite: {loop_start_ms/1000:.1f}s - {loop_end_ms/1000:.1f}s", session_id)
-            else:
-                # Fallback: use middle section
-                mid_point = len(audio) // 2
-                loop_duration_ms = bar_duration * 4 * 1000
-                rhythmic_loop = audio[mid_point:mid_point + int(loop_duration_ms)]
-                log_message(f"⚠️ Fallback: boucle du milieu du morceau", session_id)
-                
-        except Exception as e:
-            log_message(f"⚠️ Erreur extraction boucle: {e} - Utilisation section milieu", session_id)
-            mid_point = len(audio) // 2
-            loop_duration_ms = 8000  # 8 seconds default
-            rhythmic_loop = audio[mid_point:mid_point + loop_duration_ms]
-        
-        update_queue_item(filename, progress=40, step='Création intro extended...')
-        
-        # =====================================================================
-        # STEP 3: CREATE EXTENDED INTRO
-        # =====================================================================
-        log_message(f"🎬 Création intro extended ({bars_to_add} mesures)...", session_id)
-        
-        # Repeat loop to reach target duration
-        intro_extended = AudioSegment.empty()
-        loop_len = len(rhythmic_loop)
-        
-        while len(intro_extended) < extension_duration:
-            intro_extended += rhythmic_loop
-        
-        # Trim to exact duration
-        intro_extended = intro_extended[:int(extension_duration)]
-        
-        # Add fade-in at the very beginning
-        intro_extended = intro_extended.fade_in(2000)  # 2 second fade-in
-        
-        log_message(f"✅ Intro: {len(intro_extended)/1000:.1f}s", session_id)
-        
-        update_queue_item(filename, progress=60, step='Création outro extended...')
-        
-        # =====================================================================
-        # STEP 4: CREATE EXTENDED OUTRO
-        # =====================================================================
-        log_message(f"🎬 Création outro extended ({bars_to_add} mesures)...", session_id)
-        
-        # Use same loop for consistency
-        outro_extended = AudioSegment.empty()
-        
-        while len(outro_extended) < extension_duration:
-            outro_extended += rhythmic_loop
-        
-        # Trim to exact duration
-        outro_extended = outro_extended[:int(extension_duration)]
-        
-        # Add fade-out at the very end
-        outro_extended = outro_extended.fade_out(4000)  # 4 second fade-out
-        
-        log_message(f"✅ Outro: {len(outro_extended)/1000:.1f}s", session_id)
-        
-        update_queue_item(filename, progress=70, step='Assemblage final...')
-        
-        # =====================================================================
-        # STEP 5: ASSEMBLE EXTENDED VERSION
-        # =====================================================================
-        log_message(f"🔨 Assemblage: Intro + Original + Outro...", session_id)
-        
-        # Smooth transitions with crossfades
-        crossfade_duration = 2000  # 2 seconds
-        
-        # Intro → Original (crossfade)
-        extended_audio = intro_extended.append(audio, crossfade=crossfade_duration)
-        
-        # Original → Outro (crossfade)
-        extended_audio = extended_audio.append(outro_extended, crossfade=crossfade_duration)
-        
-        final_duration = len(extended_audio) / 1000.0
-        log_message(f"✨ Extended terminé: {int(final_duration//60)}:{int(final_duration%60):02d} (vs {int(duration_sec//60)}:{int(duration_sec%60):02d} original)", session_id)
+        # Use strict protocol for Extended Edit creation
+        extended_audio, bpm, bars_added = create_extended_strict(
+            filepath=filepath,
+            filename=filename,
+            session_id=session_id,
+            log_func=log_message,
+            update_func=update_queue_item
+        )
         
         # Prepare output
-        update_queue_item(filename, progress=60, step='Export MP3...')
+        update_queue_item(filename, progress=90, step='Export MP3...')
         
         clean_name, _ = clean_filename(filename)
         track_output_dir = os.path.join(PROCESSED_FOLDER, clean_name)
@@ -2489,7 +2344,7 @@ def create_extended_version_dev(filepath, filename, session_id='global'):
         log_message(f"💾 Exporté: {output_filename}", session_id)
         
         # Add metadata
-        update_queue_item(filename, progress=80, step='Ajout métadonnées...')
+        update_queue_item(filename, progress=95, step='Ajout métadonnées...')
         try:
             audio_file = MP3(output_path, ID3=ID3)
             if audio_file.tags is None:
@@ -2498,12 +2353,15 @@ def create_extended_version_dev(filepath, filename, session_id='global'):
             audio_file.tags.add(TIT2(encoding=3, text=f"{clean_name} - Extended"))
             audio_file.tags.add(TPE1(encoding=3, text="ID By Rivoli"))
             audio_file.tags.add(TPUB(encoding=3, text="ID By Rivoli"))
+            audio_file.tags.add(TBPM(encoding=3, text=str(int(bpm))))
+            audio_file.tags.add(TXXX(encoding=3, desc='Extended Bars', text=f"+{bars_added} bars intro/outro"))
             audio_file.save()
+            log_message(f"✅ Métadonnées : BPM={int(bpm)}, Extended=+{bars_added} mesures", session_id)
         except Exception as e:
             log_message(f"⚠️ Erreur métadonnées: {e}", session_id)
         
         # Register for download
-        update_queue_item(filename, progress=90, step='Finalisation...')
+        update_queue_item(filename, progress=98, step='Finalisation...')
         track_file_for_pending_download(clean_name, output_path, 1)
         
         # Build download URL
