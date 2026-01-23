@@ -1281,7 +1281,7 @@
                     <div class="card-header">
                         <div class="card-title">
                             <i data-lucide="upload-cloud"></i>
-                            Upload Audio Files
+                            Upload Your Track (Extended Version Generator)
                         </div>
                         <button class="btn btn-ghost" onclick="clearFiles()" id="clearBtn" style="display: none;">
                             <i data-lucide="trash-2"></i>
@@ -1294,8 +1294,8 @@
                                 <div class="upload-icon">
                                     <i data-lucide="music"></i>
                                 </div>
-                                <div class="upload-title">Drop MP3 files or folders here</div>
-                                <div class="upload-subtitle">or click to browse</div>
+                                <div class="upload-title">Drop your MP3 track here</div>
+                                <div class="upload-subtitle">🔵 DEV MODE: Generates Extended version only</div>
                                 <div class="upload-actions">
                                     <button type="button" class="btn btn-secondary" onclick="document.getElementById('fileInput').click()">
                                         <i data-lucide="file-audio"></i>
@@ -1338,7 +1338,7 @@
 
                             <button type="submit" class="btn btn-primary btn-full" id="submitBtn">
                                 <i data-lucide="play"></i>
-                                Start Processing
+                                Create Extended Version
                             </button>
         </form>
                     </div>
@@ -1348,7 +1348,7 @@
                 <div class="results-section" id="resultsSection">
                     <div class="results-header">
                         <div>
-                            <div class="results-title">Processed Tracks</div>
+                            <div class="results-title">Extended Versions Ready</div>
                             <div class="results-count" id="resultsCount">0 tracks ready</div>
             </div>
                         <div style="display: flex; gap: 8px;">
@@ -1836,7 +1836,7 @@
             logPanel.classList.add('active');
             resultsSection.classList.add('active');
             submitBtn.disabled = true;
-            submitBtn.innerHTML = '<i data-lucide="loader-2" class="spin"></i> Uploading & Processing...';
+            submitBtn.innerHTML = '<i data-lucide="loader-2" class="spin"></i> Creating Extended...';
             lucide.createIcons();
             
             if (!startTime) startTime = Date.now();
@@ -2212,7 +2212,7 @@
         function resetForNewUpload() {
             isUploading = false;
             submitBtn.disabled = false;
-            submitBtn.innerHTML = '<i data-lucide="play"></i> Start Processing';
+            submitBtn.innerHTML = '<i data-lucide="play"></i> Create Extended Version';
             lucide.createIcons();
             selectedFiles = [];
             updateFileList();

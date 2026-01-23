@@ -21,6 +21,12 @@ import urllib.parse
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'idbyrivoli-secret-key-2024')
 
+# ============================================================================
+# DEV MODE - Simplified workflow: Upload → Extended → Download
+# ============================================================================
+DEV_MODE = True
+print("🔵 DEV MODE ACTIVÉ - Workflow simplifié: Upload → Extended → Download")
+
 # Configure Flask for large batch uploads (1000+ tracks)
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max per request
 app.config['MAX_FORM_MEMORY_SIZE'] = 100 * 1024 * 1024  # 100MB form memory
@@ -1836,7 +1842,14 @@ def worker(worker_id):
             update_queue_item(filename, status='processing', worker=worker_id, progress=0, step='Démarrage...')
             
             print(f"🔄 Worker {worker_id} traite: {filename}" + (" (RETRY)" if is_retry else ""))
-            success, error_msg = process_single_track(filepath, filename, session_id, worker_id, is_retry)
+            
+            # =================================================================
+            # DEV MODE: Use simplified Extended-only workflow
+            # =================================================================
+            if DEV_MODE:
+                success, output_path, error_msg = create_extended_version_dev(filepath, filename, session_id)
+            else:
+                success, error_msg = process_single_track(filepath, filename, session_id, worker_id, is_retry)
             
             # Handle result
             if success:
@@ -2269,6 +2282,93 @@ def remove_failed_file(session_id, filename):
     current_status['failed_files'] = [f for f in current_status['failed_files'] if f['filename'] != filename]
 
 # Modified process function for SINGLE track with RETRY LOGIC
+def create_extended_version_dev(filepath, filename, session_id='global'):
+    """
+    [DEV MODE] Simplified workflow: Create Extended version only.
+    
+    TODO: Implement proper Extended logic based on user specifications.
+    For now, this is a placeholder that will be updated with proper Extended creation logic.
+    
+    Returns: (success: bool, output_path: str or None, error_message: str or None)
+    """
+    try:
+        log_message(f"🔵 [DEV] Création version Extended pour: {filename}", session_id)
+        update_queue_item(filename, progress=10, step='Chargement audio...')
+        
+        # Load audio file
+        audio = AudioSegment.from_mp3(filepath)
+        duration_sec = len(audio) / 1000.0
+        log_message(f"📊 Durée: {duration_sec:.1f}s", session_id)
+        
+        update_queue_item(filename, progress=30, step='Création Extended...')
+        
+        # =====================================================================
+        # PLACEHOLDER: Extended creation logic will be added here
+        # =====================================================================
+        # For now, just duplicate the audio to simulate an extended version
+        # This will be replaced with proper logic based on user instructions
+        
+        extended_audio = audio + audio  # Simple duplication as placeholder
+        
+        log_message(f"✨ Extended créé (placeholder) - Durée: {len(extended_audio)/1000.0:.1f}s", session_id)
+        
+        # Prepare output
+        update_queue_item(filename, progress=60, step='Export MP3...')
+        
+        clean_name, _ = clean_filename(filename)
+        track_output_dir = os.path.join(PROCESSED_FOLDER, clean_name)
+        os.makedirs(track_output_dir, exist_ok=True)
+        
+        # Export MP3
+        output_filename = f"{clean_name} - Extended.mp3"
+        output_path = os.path.join(track_output_dir, output_filename)
+        
+        extended_audio.export(
+            output_path,
+            format='mp3',
+            bitrate='320k',
+            parameters=['-q:a', '0']
+        )
+        
+        log_message(f"💾 Exporté: {output_filename}", session_id)
+        
+        # Add metadata
+        update_queue_item(filename, progress=80, step='Ajout métadonnées...')
+        try:
+            audio_file = MP3(output_path, ID3=ID3)
+            if audio_file.tags is None:
+                audio_file.add_tags()
+            
+            audio_file.tags.add(TIT2(encoding=3, text=f"{clean_name} - Extended"))
+            audio_file.tags.add(TPE1(encoding=3, text="ID By Rivoli"))
+            audio_file.tags.add(TPUB(encoding=3, text="ID By Rivoli"))
+            audio_file.save()
+        except Exception as e:
+            log_message(f"⚠️ Erreur métadonnées: {e}", session_id)
+        
+        # Register for download
+        update_queue_item(filename, progress=90, step='Finalisation...')
+        track_file_for_pending_download(clean_name, output_path, 1)
+        
+        # Build download URL
+        rel_path = os.path.relpath(output_path, BASE_DIR)
+        download_url = f"/download_file?path={urllib.parse.quote(rel_path, safe='/')}"
+        
+        base_url = CURRENT_HOST_URL if CURRENT_HOST_URL else "http://localhost:8888"
+        log_message(f"✅ Extended terminé! 📥 URL: {base_url}{download_url}", session_id)
+        
+        update_queue_item(filename, progress=100, step='Terminé ✅', status='completed')
+        
+        return True, output_path, None
+        
+    except Exception as e:
+        error_msg = f"Erreur création Extended: {str(e)}"
+        log_message(f"❌ {error_msg}", session_id)
+        import traceback
+        traceback.print_exc()
+        return False, None, error_msg
+
+
 def process_single_track(filepath, filename, session_id='global', worker_id=None, is_retry=False):
     """
     Process a single track with comprehensive retry logic.
