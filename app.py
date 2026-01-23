@@ -2517,14 +2517,21 @@ def create_extended_version_dev(filepath, filename, session_id='global'):
         
         # Add to session results for UI display
         current_status = get_job_status(session_id)
-        current_status['results'].append({
+        result_data = {
             'track_name': clean_name,
             'edits': [{
                 'name': f"{clean_name} - Extended",
                 'mp3': download_url,
                 'wav': None  # DEV mode: MP3 only
             }]
-        })
+        }
+        current_status['results'].append(result_data)
+        
+        # Debug log
+        print(f"🔍 DEBUG: Added result to session {session_id}")
+        print(f"🔍 DEBUG: Result data: {result_data}")
+        print(f"🔍 DEBUG: Total results in session: {len(current_status['results'])}")
+        log_message(f"📊 Résultat ajouté à la session {session_id} - Total: {len(current_status['results'])}", session_id)
         
         return True, output_path, None
         
@@ -3128,6 +3135,10 @@ def status():
     # Ensure failed_files is included (for frontend display)
     if 'failed_files' not in current_status:
         current_status['failed_files'] = []
+    
+    # Debug log for DEV mode (only log when there are results to avoid spam)
+    if DEV_MODE and len(current_status.get('results', [])) > 0:
+        print(f"🔍 /status called - Session: {session_id}, Results count: {len(current_status['results'])}")
     
     # Return session-specific status
     return jsonify(current_status)
