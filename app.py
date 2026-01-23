@@ -1848,6 +1848,12 @@ def worker(worker_id):
             # =================================================================
             if DEV_MODE:
                 success, output_path, error_msg = create_extended_version_dev(filepath, filename, session_id)
+                
+                # Update upload history status for DEV mode
+                if success:
+                    update_upload_history_status(filename, 'completed', 'Extended')
+                else:
+                    update_upload_history_status(filename, 'failed', error=error_msg)
             else:
                 success, error_msg = process_single_track(filepath, filename, session_id, worker_id, is_retry)
             
@@ -2508,6 +2514,17 @@ def create_extended_version_dev(filepath, filename, session_id='global'):
         log_message(f"✅ Extended terminé! 📥 URL: {base_url}{download_url}", session_id)
         
         update_queue_item(filename, progress=100, step='Terminé ✅', status='completed')
+        
+        # Add to session results for UI display
+        current_status = get_job_status(session_id)
+        current_status['results'].append({
+            'track_name': clean_name,
+            'edits': [{
+                'name': f"{clean_name} - Extended",
+                'mp3': download_url,
+                'wav': None  # DEV mode: MP3 only
+            }]
+        })
         
         return True, output_path, None
         
