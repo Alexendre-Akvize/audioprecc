@@ -2498,6 +2498,12 @@
         async function handleTrackedDownload(event, url, filename, trackName) {
             event.preventDefault();
             
+            console.log(`📥 handleTrackedDownload called:`);
+            console.log(`   URL: ${url}`);
+            console.log(`   Filename: ${filename}`);
+            console.log(`   TrackName: ${trackName}`);
+            console.log(`   trackDownloads keys:`, Object.keys(trackDownloads));
+            
             // Check if already downloaded
             if (trackDownloads[trackName]?.files[filename]) {
                 showToast(`${filename} already downloaded`);

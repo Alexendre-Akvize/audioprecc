@@ -2323,8 +2323,9 @@ def process_track_without_separation(filepath, filename, track_type, session_id=
             'wav': wav_url
         }
         
-        # Register for pending download
-        track_file_for_pending_download(metadata_base_name, filepath, 2)  # 2 files (MP3 + WAV)
+        # Register for pending download with file list for sequential tracking
+        file_list = [f"{metadata_title}.mp3", f"{metadata_title}.wav"]
+        track_file_for_pending_download(metadata_base_name, filepath, 2, file_list)
         
         update_queue_item(filename, progress=100, step=f'Terminé ({track_type}) ✅')
         
@@ -3250,6 +3251,9 @@ def download_file():
     # Delete track ONLY after ALL versions (MP3 + WAV) have been downloaded
     # ==========================================================================
     if SEQUENTIAL_MODE and track_name:
+        print(f"   📊 SEQUENTIAL MODE: Tracking download")
+        print(f"      Track name: '{track_name}'")
+        print(f"      File downloaded: '{download_filename}'")
         all_done = mark_file_downloaded(track_name, download_filename)
         
         # Add download status to response headers for frontend tracking
