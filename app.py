@@ -1827,21 +1827,17 @@ NUM_WORKERS = get_optimal_workers()
 print(f"🔧 Configuration: {CPU_COUNT} CPUs détectés → {NUM_WORKERS} workers parallèles")
 
 # =============================================================================
-# BATCH PROCESSING: Process 200, wait 30min, delete pending, loop
+# BATCH TRACKING: Track processed count (NO PAUSE, NO AUTO-DELETE)
 # =============================================================================
-BATCH_SIZE = int(os.environ.get('BATCH_SIZE', 200))  # Process this many tracks before pause
-BATCH_WAIT_MINUTES = int(os.environ.get('BATCH_WAIT_MINUTES', 30))  # Wait this long between batches
-BATCH_MODE_ENABLED = os.environ.get('BATCH_MODE', 'true').lower() == 'true'  # Enable/disable batch mode
+BATCH_SIZE = int(os.environ.get('BATCH_SIZE', 200))  # Log milestone every N tracks
+BATCH_MODE_ENABLED = os.environ.get('BATCH_MODE', 'true').lower() == 'true'  # Enable/disable batch tracking
 
 batch_processed_count = 0
 batch_lock = Lock()
-batch_paused = False
-batch_pause_event = threading.Event()
-batch_pause_event.set()  # Start unpaused
 
 def increment_batch_count():
-    """Increment the batch counter and check if we need to pause."""
-    global batch_processed_count, batch_paused
+    """Increment the batch counter for tracking purposes (no pause, no delete)."""
+    global batch_processed_count
     
     if not BATCH_MODE_ENABLED:
         return
@@ -1850,93 +1846,198 @@ def increment_batch_count():
         batch_processed_count += 1
         count = batch_processed_count
         
-        print(f"📊 Batch progress: {count}/{BATCH_SIZE}")
-        
-        if count >= BATCH_SIZE and not batch_paused:
-            batch_paused = True
-            batch_pause_event.clear()  # Pause workers
-            
-            # Start the batch pause thread
-            pause_thread = threading.Thread(target=batch_pause_cycle, daemon=True)
-            pause_thread.start()
+        # Log progress every BATCH_SIZE tracks
+        if count % BATCH_SIZE == 0:
+            print(f"📊 Milestone: {count} tracks processed (continuous processing, no pause)")
+            log_message(f"📊 {count} tracks traités (traitement continu)")
 
-def batch_pause_cycle():
-    """Pause for 30 minutes, delete all pending, then resume."""
-    global batch_processed_count, batch_paused
-    
-    print(f"")
-    print(f"⏸️ ════════════════════════════════════════════════")
-    print(f"⏸️ BATCH LIMIT REACHED: {BATCH_SIZE} tracks processed")
-    print(f"⏸️ Pausing for {BATCH_WAIT_MINUTES} minutes...")
-    print(f"⏸️ ════════════════════════════════════════════════")
-    
-    log_message(f"⏸️ Batch de {BATCH_SIZE} tracks terminé - Pause de {BATCH_WAIT_MINUTES}min")
-    
-    # Wait for BATCH_WAIT_MINUTES
-    time.sleep(BATCH_WAIT_MINUTES * 60)
-    
-    print(f"")
-    print(f"🗑️ ════════════════════════════════════════════════")
-    print(f"🗑️ BATCH CLEANUP: Deleting all pending tracks...")
-    print(f"🗑️ ════════════════════════════════════════════════")
-    
-    log_message(f"🗑️ Nettoyage batch: suppression des tracks en attente...")
-    
-    # Delete all pending tracks from both tracking systems
-    deleted_count = 0
-    
-    # 1. Clean up track_download_status (sequential mode)
-    with track_download_status_lock:
-        tracks_to_cleanup = list(track_download_status.keys())
-    
-    for track_name in tracks_to_cleanup:
-        try:
-            cleanup_track_after_downloads(track_name)
-            deleted_count += 1
-        except Exception as e:
-            print(f"   ⚠️ Error cleaning {track_name}: {e}")
-    
-    # 2. Clean up pending_downloads (legacy mode)
-    with pending_downloads_lock:
-        pending_tracks = list(pending_downloads.keys())
-    
-    for track_name in pending_tracks:
-        try:
-            confirm_track_download(track_name, add_to_logs=False)
-            deleted_count += 1
-        except Exception as e:
-            print(f"   ⚠️ Error cleaning {track_name}: {e}")
-    
-    # 3. Clean up processed folder directly
+def wait_for_batch_resume():
+    """Legacy function - no longer pauses, kept for compatibility."""
+    pass  # No pause - continuous processing
+
+print(f"📦 Batch tracking: {'ENABLED' if BATCH_MODE_ENABLED else 'DISABLED'} (milestone every {BATCH_SIZE} tracks, no pause)")
+
+# =============================================================================
+# DISK-BASED CLEANUP: Delete oldest 25k tracks when disk reaches 80%
+# =============================================================================
+DISK_THRESHOLD_PERCENT = int(os.environ.get('DISK_THRESHOLD_PERCENT', 80))  # Trigger cleanup at 80% disk usage
+TRACKS_TO_DELETE = int(os.environ.get('TRACKS_TO_DELETE', 25000))  # Delete 25k oldest tracks when triggered
+DISK_CHECK_INTERVAL_SECONDS = int(os.environ.get('DISK_CHECK_INTERVAL', 60))  # Check disk every 60 seconds
+DISK_CLEANUP_ENABLED = os.environ.get('DISK_CLEANUP', 'true').lower() == 'true'
+
+disk_cleanup_in_progress = False
+disk_cleanup_lock = Lock()
+
+def get_disk_usage_percent():
+    """Get current disk usage percentage."""
     try:
+        disk = psutil.disk_usage('/')
+        return disk.percent
+    except Exception as e:
+        print(f"⚠️ Could not get disk usage: {e}")
+        return 0
+
+def get_oldest_tracks(limit):
+    """
+    Get list of oldest track folders in PROCESSED_FOLDER sorted by modification time.
+    Returns list of tuples: (track_name, full_path, mtime)
+    """
+    tracks = []
+    
+    try:
+        if not os.path.exists(PROCESSED_FOLDER):
+            return []
+        
         for item in os.listdir(PROCESSED_FOLDER):
             item_path = os.path.join(PROCESSED_FOLDER, item)
             if os.path.isdir(item_path):
-                shutil.rmtree(item_path)
-                print(f"   🗑️ Deleted: {item}")
+                try:
+                    mtime = os.path.getmtime(item_path)
+                    tracks.append((item, item_path, mtime))
+                except Exception as e:
+                    print(f"   ⚠️ Could not get mtime for {item}: {e}")
+        
+        # Sort by modification time (oldest first)
+        tracks.sort(key=lambda x: x[2])
+        
+        return tracks[:limit]
+    
     except Exception as e:
-        print(f"   ⚠️ Error cleaning processed folder: {e}")
-    
-    print(f"")
-    print(f"✅ ════════════════════════════════════════════════")
-    print(f"✅ BATCH CLEANUP COMPLETE: {deleted_count} tracks deleted")
-    print(f"✅ Resuming processing...")
-    print(f"✅ ════════════════════════════════════════════════")
-    
-    log_message(f"✅ Nettoyage terminé: {deleted_count} tracks supprimées - Reprise du traitement")
-    
-    # Reset batch counter and resume
-    with batch_lock:
-        batch_processed_count = 0
-        batch_paused = False
-        batch_pause_event.set()  # Resume workers
+        print(f"⚠️ Error getting oldest tracks: {e}")
+        return []
 
-def wait_for_batch_resume():
-    """Called by workers to wait if batch is paused."""
-    if BATCH_MODE_ENABLED:
-        batch_pause_event.wait()  # Blocks if paused
+def delete_oldest_tracks(count):
+    """
+    Delete the oldest N track folders from PROCESSED_FOLDER.
+    Also cleans up associated htdemucs folders and tracking data.
+    Returns number of tracks actually deleted.
+    """
+    global disk_cleanup_in_progress
+    
+    with disk_cleanup_lock:
+        if disk_cleanup_in_progress:
+            print("⚠️ Disk cleanup already in progress, skipping...")
+            return 0
+        disk_cleanup_in_progress = True
+    
+    deleted_count = 0
+    freed_bytes = 0
+    
+    try:
+        oldest_tracks = get_oldest_tracks(count)
+        
+        if not oldest_tracks:
+            print("ℹ️ No tracks found to delete")
+            return 0
+        
+        print(f"")
+        print(f"🗑️ ════════════════════════════════════════════════")
+        print(f"🗑️ DISK CLEANUP: Deleting {len(oldest_tracks)} oldest tracks...")
+        print(f"🗑️ ════════════════════════════════════════════════")
+        
+        for track_name, track_path, mtime in oldest_tracks:
+            try:
+                # Calculate size before deletion
+                track_size = 0
+                for dirpath, dirnames, filenames in os.walk(track_path):
+                    for f in filenames:
+                        fp = os.path.join(dirpath, f)
+                        try:
+                            track_size += os.path.getsize(fp)
+                        except:
+                            pass
+                
+                # Delete the track folder
+                shutil.rmtree(track_path)
+                deleted_count += 1
+                freed_bytes += track_size
+                
+                # Also delete htdemucs intermediate folder
+                htdemucs_folder = os.path.join(OUTPUT_FOLDER, 'htdemucs', track_name)
+                if os.path.exists(htdemucs_folder):
+                    for dirpath, dirnames, filenames in os.walk(htdemucs_folder):
+                        for f in filenames:
+                            fp = os.path.join(dirpath, f)
+                            try:
+                                freed_bytes += os.path.getsize(fp)
+                            except:
+                                pass
+                    shutil.rmtree(htdemucs_folder)
+                
+                # Clean up tracking data
+                with pending_downloads_lock:
+                    if track_name in pending_downloads:
+                        del pending_downloads[track_name]
+                
+                with track_download_status_lock:
+                    if track_name in track_download_status:
+                        del track_download_status[track_name]
+                
+                with scheduled_deletions_lock:
+                    if track_name in scheduled_deletions:
+                        del scheduled_deletions[track_name]
+                
+                if deleted_count % 1000 == 0:
+                    print(f"   🗑️ Progress: {deleted_count}/{len(oldest_tracks)} tracks deleted...")
+                
+            except Exception as e:
+                print(f"   ⚠️ Error deleting {track_name}: {e}")
+        
+        freed_mb = freed_bytes / (1024 * 1024)
+        freed_gb = freed_bytes / (1024 * 1024 * 1024)
+        
+        print(f"")
+        print(f"✅ ════════════════════════════════════════════════")
+        print(f"✅ DISK CLEANUP COMPLETE")
+        print(f"✅ Deleted: {deleted_count} tracks")
+        if freed_gb >= 1:
+            print(f"✅ Freed: {freed_gb:.2f} GB")
+        else:
+            print(f"✅ Freed: {freed_mb:.1f} MB")
+        print(f"✅ New disk usage: {get_disk_usage_percent():.1f}%")
+        print(f"✅ ════════════════════════════════════════════════")
+        
+        log_message(f"🗑️ Disk cleanup: {deleted_count} oldest tracks deleted, {freed_gb:.2f} GB freed")
+        
+    finally:
+        with disk_cleanup_lock:
+            disk_cleanup_in_progress = False
+    
+    return deleted_count
 
-print(f"📦 Batch mode: {'ENABLED' if BATCH_MODE_ENABLED else 'DISABLED'} (size={BATCH_SIZE}, wait={BATCH_WAIT_MINUTES}min)")
+def disk_monitor_loop():
+    """Background thread that monitors disk usage and triggers cleanup when needed."""
+    while True:
+        try:
+            usage = get_disk_usage_percent()
+            
+            if usage >= DISK_THRESHOLD_PERCENT:
+                print(f"")
+                print(f"⚠️ ════════════════════════════════════════════════")
+                print(f"⚠️ DISK USAGE ALERT: {usage:.1f}% (threshold: {DISK_THRESHOLD_PERCENT}%)")
+                print(f"⚠️ Starting cleanup of {TRACKS_TO_DELETE} oldest tracks...")
+                print(f"⚠️ ════════════════════════════════════════════════")
+                
+                log_message(f"⚠️ Disk usage {usage:.1f}% >= {DISK_THRESHOLD_PERCENT}% - Starting cleanup")
+                
+                deleted = delete_oldest_tracks(TRACKS_TO_DELETE)
+                
+                if deleted > 0:
+                    new_usage = get_disk_usage_percent()
+                    log_message(f"✅ Cleanup complete: {deleted} tracks deleted, disk now at {new_usage:.1f}%")
+            
+        except Exception as e:
+            print(f"⚠️ Disk monitor error: {e}")
+        
+        time.sleep(DISK_CHECK_INTERVAL_SECONDS)
+
+# Start disk monitor thread
+if DISK_CLEANUP_ENABLED:
+    disk_monitor_thread = threading.Thread(target=disk_monitor_loop, daemon=True)
+    disk_monitor_thread.start()
+    print(f"💾 Disk cleanup: ENABLED (threshold={DISK_THRESHOLD_PERCENT}%, delete={TRACKS_TO_DELETE} oldest tracks)")
+else:
+    print(f"💾 Disk cleanup: DISABLED")
 
 # =============================================================================
 # DELAYED DELETION: Delete downloaded files after X minutes
@@ -3798,65 +3899,71 @@ def list_files():
 
 @app.route('/batch_status')
 def get_batch_status():
-    """Get the current batch processing status."""
+    """Get the current batch processing status including disk info."""
+    disk_usage = get_disk_usage_percent()
+    
+    # Count total tracks in processed folder
+    total_tracks = 0
+    try:
+        if os.path.exists(PROCESSED_FOLDER):
+            total_tracks = len([d for d in os.listdir(PROCESSED_FOLDER) if os.path.isdir(os.path.join(PROCESSED_FOLDER, d))])
+    except:
+        pass
+    
     with batch_lock:
         return jsonify({
             'enabled': BATCH_MODE_ENABLED,
-            'batch_size': BATCH_SIZE,
-            'wait_minutes': BATCH_WAIT_MINUTES,
+            'milestone_size': BATCH_SIZE,
             'processed_count': batch_processed_count,
-            'remaining_until_pause': max(0, BATCH_SIZE - batch_processed_count),
-            'is_paused': batch_paused,
             'queue_size': track_queue.qsize(),
             'pending_downloads': get_pending_tracks_count(),
-            'sequential_tracks': len(track_download_status)
+            'sequential_tracks': len(track_download_status),
+            'continuous_processing': True,  # No pause, no auto-delete
+            'disk': {
+                'usage_percent': disk_usage,
+                'threshold_percent': DISK_THRESHOLD_PERCENT,
+                'cleanup_enabled': DISK_CLEANUP_ENABLED,
+                'tracks_to_delete': TRACKS_TO_DELETE,
+                'total_tracks_stored': total_tracks,
+                'cleanup_in_progress': disk_cleanup_in_progress
+            }
         })
 
 @app.route('/batch_cleanup', methods=['POST'])
 def manual_batch_cleanup():
-    """Manually trigger batch cleanup (delete all pending tracks)."""
-    log_message(f"🗑️ Manual batch cleanup triggered")
+    """Manually trigger disk-based cleanup (delete oldest 25k tracks)."""
+    log_message(f"🗑️ Manual disk cleanup triggered")
     
-    deleted_count = 0
+    # Use the disk-based cleanup function
+    deleted_count = delete_oldest_tracks(TRACKS_TO_DELETE)
     
-    # 1. Clean up track_download_status (sequential mode)
-    with track_download_status_lock:
-        tracks_to_cleanup = list(track_download_status.keys())
-    
-    for track_name in tracks_to_cleanup:
-        try:
-            cleanup_track_after_downloads(track_name)
-            deleted_count += 1
-        except Exception as e:
-            print(f"   ⚠️ Error cleaning {track_name}: {e}")
-    
-    # 2. Clean up pending_downloads (legacy mode)
-    with pending_downloads_lock:
-        pending_tracks = list(pending_downloads.keys())
-    
-    for track_name in pending_tracks:
-        try:
-            confirm_track_download(track_name, add_to_logs=False)
-            deleted_count += 1
-        except Exception as e:
-            print(f"   ⚠️ Error cleaning {track_name}: {e}")
-    
-    # 3. Clean up processed folder directly
-    try:
-        for item in os.listdir(PROCESSED_FOLDER):
-            item_path = os.path.join(PROCESSED_FOLDER, item)
-            if os.path.isdir(item_path):
-                shutil.rmtree(item_path)
-                print(f"   🗑️ Deleted: {item}")
-    except Exception as e:
-        print(f"   ⚠️ Error cleaning processed folder: {e}")
-    
-    log_message(f"✅ Manual cleanup complete: {deleted_count} tracks deleted")
+    log_message(f"✅ Manual cleanup complete: {deleted_count} oldest tracks deleted")
     
     return jsonify({
         'success': True,
         'deleted_count': deleted_count,
-        'message': f'Deleted {deleted_count} tracks'
+        'disk_usage_percent': get_disk_usage_percent(),
+        'message': f'Deleted {deleted_count} oldest tracks'
+    })
+
+@app.route('/cleanup_oldest', methods=['POST'])
+def cleanup_oldest_tracks():
+    """Manually trigger cleanup of oldest N tracks (custom count via query param)."""
+    count = request.args.get('count', TRACKS_TO_DELETE, type=int)
+    
+    # Cap at reasonable maximum
+    count = min(count, 100000)
+    
+    log_message(f"🗑️ Manual cleanup of {count} oldest tracks triggered")
+    
+    deleted_count = delete_oldest_tracks(count)
+    
+    return jsonify({
+        'success': True,
+        'requested_count': count,
+        'deleted_count': deleted_count,
+        'disk_usage_percent': get_disk_usage_percent(),
+        'message': f'Deleted {deleted_count} oldest tracks'
     })
 
 @app.route('/batch_reset', methods=['POST'])
