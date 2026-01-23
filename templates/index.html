@@ -968,6 +968,77 @@
             border-color: var(--border-hover);
         }
 
+        .dl-btn-play {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .dl-btn-play:hover {
+            background: #2563eb;
+        }
+
+        /* Audio Player Modal */
+        .audio-player-modal {
+            position: fixed;
+            bottom: 80px;
+            right: 24px;
+            background: var(--bg-card);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+            z-index: 9999;
+            min-width: 320px;
+            display: none;
+        }
+
+        .audio-player-modal.active {
+            display: block;
+            animation: slideUp 0.2s ease;
+        }
+
+        @keyframes slideUp {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        .audio-player-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .audio-player-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-primary);
+            max-width: 250px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .audio-player-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 4px;
+            display: flex;
+            align-items: center;
+        }
+
+        .audio-player-close:hover {
+            color: var(--text-primary);
+        }
+
         /* Log Panel */
         .log-panel {
             display: none;
@@ -2180,12 +2251,21 @@
                 let editsHtml = track.edits.map(edit => {
                     const mp3Filename = edit.name + '.mp3';
                     const wavFilename = edit.name + '.wav';
+                    
+                    // Only show WAV button if WAV file exists (in production mode)
+                    const wavButton = edit.wav ? 
+                        `<a href="${edit.wav}" class="dl-btn dl-btn-wav" onclick="handleDownload(event, '${edit.wav}', '${escapeHtml(wavFilename)}')">WAV</a>` : 
+                        '';
+                    
                     return `
                         <div class="edit-item">
                             <span class="edit-name">${escapeHtml(edit.name)}</span>
                             <div class="edit-actions">
+                                <button class="dl-btn dl-btn-play" onclick="playAudio('${edit.mp3}', '${escapeHtml(edit.name)}')">
+                                    <i data-lucide="play" style="width: 14px; height: 14px;"></i> Play
+                                </button>
                                 <a href="${edit.mp3}" class="dl-btn dl-btn-mp3" onclick="handleDownload(event, '${edit.mp3}', '${escapeHtml(mp3Filename)}')">MP3</a>
-                                <a href="${edit.wav}" class="dl-btn dl-btn-wav" onclick="handleDownload(event, '${edit.wav}', '${escapeHtml(wavFilename)}')">WAV</a>
+                                ${wavButton}
                             </div>
                         </div>
                     `;
@@ -2757,6 +2837,51 @@
                 showToast('Error clearing history');
             }
         }
+
+        // Audio Player
+        function playAudio(url, title) {
+            const modal = document.getElementById('audioPlayerModal');
+            const audio = document.getElementById('audioPlayerElement');
+            const titleEl = document.getElementById('audioPlayerTitle');
+            
+            // Update title and source
+            titleEl.textContent = title;
+            audio.src = url;
+            
+            // Show modal and play
+            modal.classList.add('active');
+            audio.play().catch(err => {
+                console.error('Error playing audio:', err);
+                showToast('Error playing audio');
+            });
+        }
+
+        function closeAudioPlayer() {
+            const modal = document.getElementById('audioPlayerModal');
+            const audio = document.getElementById('audioPlayerElement');
+            
+            audio.pause();
+            audio.src = '';
+            modal.classList.remove('active');
+        }
+    </script>
+
+    <!-- Audio Player Modal -->
+    <div id="audioPlayerModal" class="audio-player-modal">
+        <div class="audio-player-header">
+            <div class="audio-player-title" id="audioPlayerTitle">Track Name</div>
+            <button class="audio-player-close" onclick="closeAudioPlayer()">
+                <i data-lucide="x" style="width: 18px; height: 18px;"></i>
+            </button>
+        </div>
+        <audio id="audioPlayerElement" controls style="width: 100%; border-radius: 8px;">
+            Your browser does not support the audio element.
+        </audio>
+    </div>
+
+    <script>
+        // Initialize icons for audio player
+        lucide.createIcons();
     </script>
 </body>
 </html>

@@ -2518,7 +2518,7 @@ def create_extended_version_dev(filepath, filename, session_id='global'):
         # Add to session results for UI display
         current_status = get_job_status(session_id)
         result_data = {
-            'track_name': clean_name,
+            'original': clean_name,  # UI expects 'original' not 'track_name'
             'edits': [{
                 'name': f"{clean_name} - Extended",
                 'mp3': download_url,
