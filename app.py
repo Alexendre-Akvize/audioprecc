@@ -3349,7 +3349,7 @@ def confirm_download():
     
     # 1. Check query params first (works for both GET and POST)
     track_name = request.args.get('track_name') or request.args.get('trackName')
-    provided_key = request.args.get('api_key') or request.args.get('apiKey')
+    # provided_key = request.args.get('api_key') or request.args.get('apiKey')
     
     # 2. Check JSON body
     if not track_name and request.is_json:
@@ -3357,7 +3357,7 @@ def confirm_download():
             data = request.get_json(force=False, silent=True)
             if data:
                 track_name = data.get('track_name') or data.get('trackName')
-                provided_key = provided_key or data.get('api_key') or data.get('apiKey')
+                # provided_key = provided_key or data.get('api_key') or data.get('apiKey')
                 print(f"   JSON body: {data}")
         except Exception as e:
             print(f"   JSON parse error: {e}")
@@ -3365,7 +3365,7 @@ def confirm_download():
     # 3. Check form data
     if not track_name and request.form:
         track_name = request.form.get('track_name') or request.form.get('trackName')
-        provided_key = provided_key or request.form.get('api_key') or request.form.get('apiKey')
+        # provided_key = provided_key or request.form.get('api_key') or request.form.get('apiKey')
         print(f"   Form data: {dict(request.form)}")
     
     # 4. Try to parse raw body as JSON (for cases where Content-Type is wrong)
@@ -3374,7 +3374,7 @@ def confirm_download():
             import json
             data = json.loads(request.data.decode('utf-8'))
             track_name = data.get('track_name') or data.get('trackName')
-            provided_key = provided_key or data.get('api_key') or data.get('apiKey')
+            # provided_key = provided_key or data.get('api_key') or data.get('apiKey')
             print(f"   Parsed raw body as JSON: {data}")
         except:
             print(f"   Raw body (not JSON): {request.data[:200] if request.data else 'empty'}")
@@ -3382,7 +3382,7 @@ def confirm_download():
     # Also check Authorization header
     auth_header = request.headers.get('Authorization', '')
     if auth_header.startswith('Bearer '):
-        provided_key = auth_header[7:]
+        # provided_key = auth_header[7:]
     
     print(f"   Extracted track_name: '{track_name}'")
     
