@@ -436,6 +436,69 @@
         .spin {
             animation: spin 1s linear infinite;
         }
+        
+        /* Time Estimation */
+        .time-estimation {
+            margin-top: 16px;
+            padding: 12px 16px;
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(139, 92, 246, 0.1));
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: var(--radius-sm);
+        }
+        
+        .time-estimation-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .time-estimation-row svg {
+            width: 16px;
+            height: 16px;
+            color: #3b82f6;
+        }
+        
+        .time-label {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        
+        .time-value {
+            font-size: 15px;
+            font-weight: 600;
+            color: #3b82f6;
+            margin-left: auto;
+            font-variant-numeric: tabular-nums;
+        }
+        
+        .time-estimation-details {
+            margin-top: 6px;
+            padding-left: 24px;
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+        
+        .time-estimation-elapsed {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid rgba(59, 130, 246, 0.15);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding-left: 24px;
+        }
+        
+        .elapsed-label {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+        
+        .elapsed-value {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            font-variant-numeric: tabular-nums;
+        }
 
         /* Sidebar */
         .sidebar {
@@ -1422,6 +1485,22 @@
                                     <i data-lucide="loader-2"></i>
                                     <span id="statusText">Initializing...</span>
                                 </div>
+                                
+                                <!-- Time Estimation Display -->
+                                <div class="time-estimation" id="timeEstimation" style="display: none;">
+                                    <div class="time-estimation-row">
+                                        <i data-lucide="clock"></i>
+                                        <span class="time-label">Estimated time remaining:</span>
+                                        <span class="time-value" id="etaValue">Calculating...</span>
+                                    </div>
+                                    <div class="time-estimation-details">
+                                        <span id="etaDetails">--</span>
+                                    </div>
+                                    <div class="time-estimation-elapsed">
+                                        <span class="elapsed-label">Elapsed:</span>
+                                        <span class="elapsed-value" id="elapsedTime">0:00</span>
+                                    </div>
+                                </div>
             </div>
             
                             <div class="log-panel" id="logPanel">
@@ -1668,6 +1747,15 @@
         // ==========================================================================
         let trackDownloads = {}; // { trackName: { files: {filename: downloaded}, edits: [], total: n, downloaded: n } }
         let currentDownloadingTrack = null; // Track currently being downloaded
+        
+        // ==========================================================================
+        // TIME ESTIMATION: Track processing times for ETA calculations
+        // ==========================================================================
+        let trackProcessingTimes = []; // Array of processing durations in ms
+        let trackStartTimes = {}; // { filename: startTimestamp } - when each track started processing
+        let lastQueueSize = 0;
+        let avgProcessingTime = 0; // Average time per track in ms
+        const MAX_TIME_SAMPLES = 20; // Keep last 20 samples for rolling average
 
         // DOM Elements
         const dropZone = document.getElementById('dropZone');
@@ -2059,6 +2147,135 @@
             showToast(toastMsg);
         });
 
+        // ==========================================================================
+        // TIME ESTIMATION FUNCTIONS
+        // ==========================================================================
+        
+        function formatDuration(ms) {
+            if (ms < 0 || !isFinite(ms)) return '--';
+            
+            const seconds = Math.floor(ms / 1000);
+            const minutes = Math.floor(seconds / 60);
+            const hours = Math.floor(minutes / 60);
+            
+            if (hours > 0) {
+                const remainingMinutes = minutes % 60;
+                return `${hours}h ${remainingMinutes}m`;
+            } else if (minutes > 0) {
+                const remainingSeconds = seconds % 60;
+                return `${minutes}m ${remainingSeconds}s`;
+            } else {
+                return `${seconds}s`;
+            }
+        }
+        
+        function updateTimeEstimation(queueItems, completedTracks, activeWorkers) {
+            const timeEstimationEl = document.getElementById('timeEstimation');
+            const etaValueEl = document.getElementById('etaValue');
+            const etaDetailsEl = document.getElementById('etaDetails');
+            const elapsedTimeEl = document.getElementById('elapsedTime');
+            
+            // Update elapsed time
+            if (startTime) {
+                const elapsed = Date.now() - startTime;
+                elapsedTimeEl.textContent = formatDuration(elapsed);
+            } else {
+                elapsedTimeEl.textContent = '0:00';
+            }
+            
+            // Track processing times for tracks that just finished
+            const currentProcessing = new Set(
+                queueItems.filter(item => item.status === 'processing').map(item => item.filename)
+            );
+            
+            // Record start times for new processing tracks
+            currentProcessing.forEach(filename => {
+                if (!trackStartTimes[filename]) {
+                    trackStartTimes[filename] = Date.now();
+                    console.log(`⏱️ Started tracking: ${filename}`);
+                }
+            });
+            
+            // Check for tracks that finished (were processing but now in completedTracks)
+            Object.keys(trackStartTimes).forEach(filename => {
+                const isCompleted = completedTracks.some(name => 
+                    filename.includes(name) || name.includes(filename.replace(/\.mp3$/i, ''))
+                );
+                const stillProcessing = currentProcessing.has(filename);
+                
+                if (isCompleted && !stillProcessing) {
+                    // Track finished - record the time
+                    const duration = Date.now() - trackStartTimes[filename];
+                    trackProcessingTimes.push(duration);
+                    
+                    // Keep only last N samples
+                    if (trackProcessingTimes.length > MAX_TIME_SAMPLES) {
+                        trackProcessingTimes.shift();
+                    }
+                    
+                    // Calculate new average
+                    avgProcessingTime = trackProcessingTimes.reduce((a, b) => a + b, 0) / trackProcessingTimes.length;
+                    
+                    console.log(`⏱️ Finished: ${filename} in ${formatDuration(duration)} (avg: ${formatDuration(avgProcessingTime)})`);
+                    delete trackStartTimes[filename];
+                }
+            });
+            
+            // Calculate ETA
+            const queueSize = queueItems.filter(item => item.status === 'waiting').length;
+            const processingCount = currentProcessing.size;
+            const totalPending = queueSize + processingCount;
+            
+            // Show/hide estimation panel
+            if (totalPending > 0 || processingCount > 0) {
+                timeEstimationEl.style.display = 'block';
+                
+                if (avgProcessingTime > 0 && activeWorkers > 0) {
+                    // Parallel processing: divide by number of active workers
+                    const effectiveWorkers = Math.max(1, activeWorkers);
+                    const etaMs = (totalPending / effectiveWorkers) * avgProcessingTime;
+                    
+                    etaValueEl.textContent = formatDuration(etaMs);
+                    
+                    // Detailed breakdown
+                    const avgPerTrack = formatDuration(avgProcessingTime);
+                    let details = `${totalPending} track${totalPending !== 1 ? 's' : ''} remaining`;
+                    details += ` · ~${avgPerTrack}/track`;
+                    if (effectiveWorkers > 1) {
+                        details += ` · ${effectiveWorkers} parallel workers`;
+                    }
+                    etaDetailsEl.textContent = details;
+                } else if (processingCount > 0) {
+                    // First track(s) still processing - estimate based on current progress
+                    const processingItems = queueItems.filter(item => item.status === 'processing');
+                    const avgProgress = processingItems.reduce((sum, item) => sum + (item.progress || 0), 0) / processingItems.length;
+                    
+                    if (avgProgress > 5) {
+                        // Estimate based on current progress
+                        const firstTrackStart = Object.values(trackStartTimes)[0];
+                        if (firstTrackStart) {
+                            const elapsed = Date.now() - firstTrackStart;
+                            const estimatedTotal = elapsed / (avgProgress / 100);
+                            const remaining = estimatedTotal - elapsed;
+                            etaValueEl.textContent = formatDuration(remaining);
+                            etaDetailsEl.textContent = `Calculating from current progress (${Math.round(avgProgress)}%)...`;
+                        } else {
+                            etaValueEl.textContent = 'Calculating...';
+                            etaDetailsEl.textContent = `${totalPending} track${totalPending !== 1 ? 's' : ''} remaining`;
+                        }
+                    } else {
+                        etaValueEl.textContent = 'Calculating...';
+                        etaDetailsEl.textContent = `${totalPending} track${totalPending !== 1 ? 's' : ''} remaining · Processing first track...`;
+                    }
+                } else {
+                    etaValueEl.textContent = 'Calculating...';
+                    etaDetailsEl.textContent = `${totalPending} track${totalPending !== 1 ? 's' : ''} waiting`;
+                }
+            } else {
+                timeEstimationEl.style.display = 'none';
+            }
+        }
+
         function startPolling() {
             if (pollingInterval) return; // Already polling
             
@@ -2068,7 +2285,8 @@
                     const status = await res.json();
 
                     numWorkers = status.num_workers || 16;
-                    updateWorkersUI(status.active_workers || 0, numWorkers);
+                    const activeWorkers = status.active_workers || 0;
+                    updateWorkersUI(activeWorkers, numWorkers);
 
                     // Update logs
                     if (status.logs?.length > 0) {
@@ -2086,6 +2304,9 @@
                     
                     // Sync full track list with server queue items (including failed files)
                     syncTracksFromQueueItems(status.queue_items || [], completedTracks, failedFiles);
+                    
+                    // Update time estimation
+                    updateTimeEstimation(status.queue_items || [], completedTracks, activeWorkers);
 
                     // Always update results if there are new ones
                     if (status.results?.length > 0 && status.results.length !== lastResultsCount) {
@@ -2532,6 +2753,13 @@
                 // Clear the full track list
                 allTracks = {};
                 updateFullTrackListUI();
+                
+                // Clear time estimation tracking
+                trackProcessingTimes = [];
+                trackStartTimes = {};
+                avgProcessingTime = 0;
+                trackDownloads = {};
+                document.getElementById('timeEstimation').style.display = 'none';
                 
                 showToast('Results cleared');
             } catch (e) {
