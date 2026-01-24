@@ -1,12 +1,13 @@
 """
 Database Service for ID By Rivoli
 Uses Prisma Python client to create/update tracks directly in the database.
-Based on the NestJS TrackProcessor implementation.
+Uploads files to S3 before storing in database (like the NestJS app).
 
 Setup:
-1. pip install prisma
+1. pip install prisma boto3
 2. prisma db pull  (to get schema from existing database)
 3. prisma generate (to generate Python client)
+4. Set S3 environment variables (S3_BUCKET, S3_ACCESS_KEY, S3_SECRET_KEY, etc.)
 """
 
 import os
@@ -29,6 +30,19 @@ try:
 except ImportError as e:
     print(f"⚠️ Prisma client not available: {e}")
     print("   Run: pip install prisma && prisma db pull && prisma generate")
+
+# Try to import S3 service
+S3_AVAILABLE = False
+try:
+    from s3_service import get_s3_service, S3Service
+    _s3 = get_s3_service()
+    S3_AVAILABLE = _s3.is_configured
+    if S3_AVAILABLE:
+        print("✅ S3 service available")
+    else:
+        print("⚠️ S3 service not configured - files won't be uploaded to S3")
+except ImportError as e:
+    print(f"⚠️ S3 service not available: {e}")
 
 # Type to file field mapping (matching NestJS create-track.dto.ts)
 TYPE_TO_FILE_FIELD_MAP = {
@@ -477,8 +491,85 @@ class PrismaDatabaseService:
             if matched_album:
                 print(f"   Matched Album: {matched_album.nomAlbum}")
             
-            # File URL
+            # File URL and S3 upload
             file_url = sanitized_data.get('Fichiers', '')
+            file_filename = ''
+            file_filesize = 0
+            
+            # Upload file to S3 if configured (matching Keystone's storage pattern)
+            if S3_AVAILABLE and file_url:
+                try:
+                    s3 = get_s3_service()
+                    
+                    # Check if this is a WAV field
+                    wav_fields = [
+                        'trackWav', 'originalTrackWave', 'originalTrackWaveClean',
+                        'originalTrackWaveDirty', 'extendedTrackWave', 'extendedTrackWaveClean',
+                        'extendedTrackWaveDirty', 'clapInMainWav', 'shortMainWav',
+                        'shortAcapInWav', 'shortClapInWav', 'acapInAcapOutMainWav',
+                        'slamDirtyMainWav', 'shortAcapOutWav', 'clapInShortAcapOutWav',
+                        'slamIntroShortAcapOutWav', 'acapInWav', 'acapOutWav',
+                        'introWav', 'shortWav', 'acapellaWav', 'instruWav', 'superShortWav',
+                    ]
+                    is_wav = file_field in wav_fields
+                    
+                    # Generate filename from title (Keystone stores just the filename)
+                    # The Titre field already contains the variant (e.g., "Track Name - Main")
+                    full_title = sanitized_data.get('Titre', '')
+                    print(f"   📝 Title for filename: '{full_title}'")
+                    
+                    audio_filename = s3.generate_audio_filename(
+                        full_title,
+                        None,  # Type is already in title
+                        format_type,
+                        file_url
+                    )
+                    
+                    # Upload to S3 (stored in tracks/mp3/ or tracks/wav/)
+                    print(f"   📤 Uploading to S3 ({'WAV' if is_wav else 'MP3'} folder)...")
+                    result = s3.upload_audio_file(
+                        source_url=file_url,
+                        filename=audio_filename,
+                        is_wav=is_wav,
+                    )
+                    
+                    # Store just the filename (like Keystone does)
+                    file_filename = result.filename
+                    file_filesize = result.filesize
+                    print(f"   ✅ S3 Upload complete: {file_filename} ({file_filesize} bytes)")
+                    
+                except Exception as e:
+                    print(f"   ❌ S3 upload failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    return {'error': f'S3 upload failed: {e}'}
+            else:
+                if not S3_AVAILABLE:
+                    print(f"   ❌ S3 not configured - cannot upload file")
+                    return {'error': 'S3 not configured'}
+                if not file_url:
+                    print(f"   ❌ No file URL provided")
+                    return {'error': 'No file URL provided'}
+            
+            # Upload cover image to S3 if provided (matching Keystone's image storage)
+            cover_image_data = {}
+            cover_url = sanitized_data.get('Url', '')
+            if S3_AVAILABLE and cover_url and 'idbyrivoli' not in cover_url.lower():
+                try:
+                    s3 = get_s3_service()
+                    print(f"   📤 Uploading cover image...")
+                    img_result = s3.upload_image(cover_url)
+                    # Keystone stores: {field}_id, {field}_filesize, {field}_width, {field}_height, {field}_extension
+                    cover_image_data = {
+                        'coverImage_id': img_result.id,
+                        'coverImage_filesize': img_result.filesize,
+                        'coverImage_width': img_result.width,
+                        'coverImage_height': img_result.height,
+                        'coverImage_extension': img_result.extension,
+                    }
+                    print(f"   ✅ Cover uploaded: {img_result.id}.{img_result.extension}")
+                except Exception as e:
+                    print(f"   ⚠️ Cover upload failed: {e}")
             
             # Check if track exists
             existing_track = self.db.track.find_first(
@@ -491,10 +582,14 @@ class PrismaDatabaseService:
                 
                 # Build update data
                 update_data = {
-                    f'{file_field}_filename': file_url,
-                    f'{file_field}_filesize': 0,
+                    f'{file_field}_filename': file_filename,
+                    f'{file_field}_filesize': file_filesize,
                     'isOriginal': True,
                 }
+                
+                # Add cover image if we uploaded one and track doesn't have one
+                if cover_image_data and not existing_track.coverImage_id:
+                    update_data.update(cover_image_data)
                 
                 # Only update empty fields
                 if not existing_track.title:
@@ -563,9 +658,13 @@ class PrismaDatabaseService:
                     'mood': PrismaJson(mood) if mood else PrismaJson([]),
                     'univers': PrismaJson(univers) if univers else PrismaJson([]),
                     'isOriginal': True,
-                    f'{file_field}_filename': file_url,
-                    f'{file_field}_filesize': 0,
+                    f'{file_field}_filename': file_filename,
+                    f'{file_field}_filesize': file_filesize,
                 }
+                
+                # Add cover image data if we uploaded one
+                if cover_image_data:
+                    create_data.update(cover_image_data)
                 
                 # Connect artist
                 if matched_artist:
