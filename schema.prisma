@@ -1,0 +1,1291 @@
+// Prisma schema for ID By Rivoli
+// This schema should match your existing database structure
+// Run `prisma db pull` to introspect and update from existing database
+
+generator client {
+  provider             = "prisma-client-py"
+  interface            = "sync"
+  recursive_type_depth = 5
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                      String                   @id @default(uuid())
+  name                    String                   @default("")
+  email                   String                   @unique @default("")
+  emailVerified           DateTime?
+  image_id                String?
+  image_filesize          Int?
+  image_width             Int?
+  image_height            Int?
+  image_extension         String?
+  password                String?
+  createdAt               DateTime?                @default(now())
+  updatedAt               DateTime?                @updatedAt
+  type                    Json                     @default("[]")
+  isFree                  Boolean                  @default(false)
+  downloadCount           Int?                     @default(0)
+  stripe_customer_id      String                   @default("")
+  billing_address         String                   @default("")
+  isVIP                   Boolean                  @default(false)
+  accountActivated        Boolean                  @default(false)
+  artistName              String                   @default("")
+  deletedAt               DateTime?
+  age                     Int?
+  instagramUrl            String                   @default("")
+  phone                   String                   @default("")
+  soundcloudURL           String                   @default("")
+  spotifyURL              String                   @default("")
+  tiktokUrl               String                   @default("")
+  twitterUrl              String                   @default("")
+  DJName                  String                   @default("")
+  favoriteStyles          Json                     @default("[]")
+  favoritesFormat         String?
+  avatar_extension        String?
+  avatar_filesize         Int?
+  avatar_height           Int?
+  avatar_id               String?
+  avatar_width            Int?
+  handle                  String                   @default("")
+  forumVerified           Boolean                  @default(false)
+  profileColor            String                   @default("")
+  isProducer              Boolean                  @default(false)
+  contrat1Accepted        Boolean                  @default(false)
+  contrat2Accepted        Boolean                  @default(false)
+  isAdmin                 Boolean                  @default(false)
+  city                    String                   @default("")
+  longBio                 String                   @default("")
+  realName                String                   @default("")
+  shortBio                String                   @default("")
+  websiteUrl              String                   @default("")
+  youtubeUrl              String                   @default("")
+  Account                 Account[]
+  Authenticator           Authenticator[]
+  Bill                    Bill[]
+  Blog                    Blog[]
+  CommunicationPreference CommunicationPreference?
+  Credit                  Credit?
+  Download                Download[]
+  ForumComment            ForumComment[]
+  ForumPost               ForumPost[]
+  ForumVideo              ForumVideo[]
+  InteractionForumPost    InteractionForumPost[]
+  Like                    Like[]
+  Listened                Listened[]
+  Mix                     Mix[]
+  Playlist                Playlist[]
+  PressInformation        PressInformation?
+  PressKit                PressKit[]
+  Session                 Session[]
+  Subscription            Subscription?
+  Track                   Track[]
+  VIPLike                 VIPLike[]
+  Artist                  Artist[]                 @relation("Artist_users")
+  ProducerRequest         ProducerRequest[]        @relation("ProducerRequest_user")
+  Search                  Search[]                 @relation("Search_user")
+  Tag                     Tag[]                    @relation("Tag_users")
+}
+
+model Account {
+  id                         String    @id @default(cuid())
+  user                       String?
+  type                       String    @default("")
+  provider                   String    @default("")
+  providerAccountId          String    @default("")
+  refresh_token              String    @default("")
+  access_token               String    @default("")
+  expires_at                 Int?
+  token_type                 String    @default("")
+  scope                      String    @default("")
+  id_token                   String    @default("")
+  session_state              String    @default("")
+  createdAt                  DateTime? @default(now())
+  updatedAt                  DateTime? @default(now())
+  provider_providerAccountId String    @unique @default("")
+  User                       User?     @relation(fields: [user], references: [id])
+
+  @@index([user])
+}
+
+model Session {
+  id           String    @id @default(uuid())
+  sessionToken String    @unique @default("")
+  user         String?
+  expires      DateTime?
+  createdAt    DateTime? @default(now())
+  updatedAt    DateTime? @default(now())
+  User         User?     @relation(fields: [user], references: [id])
+
+  @@index([user])
+}
+
+model VerificationToken {
+  id                                      String              @id @default(uuid())
+  identifier                              String              @default("")
+  token                                   String              @unique @default("")
+  expires                                 DateTime?
+  identifier_tokenId                      String?             @map("identifier_token")
+  maxUses                                 Int?                @default(10)
+  usedCount                               Int?                @default(0)
+  used                                    Int?                @default(0)
+  identifier_token                        VerificationToken?  @relation("VerificationToken_identifier_token", fields: [identifier_tokenId], references: [id])
+  from_VerificationToken_identifier_token VerificationToken[] @relation("VerificationToken_identifier_token")
+
+  @@index([identifier_tokenId])
+}
+
+model Authenticator {
+  id                   String  @id @default(cuid())
+  credentialID         String  @unique @default("")
+  user                 String?
+  providerAccountId    String  @default("")
+  credentialPublicKey  String  @default("")
+  counter              Int?
+  credentialDeviceType String  @default("")
+  credentialBackedUp   Boolean @default(false)
+  transports           String  @default("")
+  User                 User?   @relation(fields: [user], references: [id])
+
+  @@index([user])
+}
+
+model Subscription {
+  id                   String    @id @default(cuid())
+  user                 String?   @unique
+  stripeId             String    @unique @default("")
+  plan                 String?
+  status               String?   @default("active")
+  price_id             String    @default("")
+  quantity             Int?
+  cancel_at_period_end DateTime?
+  cancel_at            DateTime?
+  canceled_at          DateTime?
+  current_period_start DateTime?
+  current_period_end   DateTime?
+  created              DateTime?
+  ended_at             DateTime?
+  trial_start          DateTime?
+  trial_end            DateTime?
+  currentPeriodEnd     DateTime?
+  createdAt            DateTime? @default(now())
+  updatedAt            DateTime? @default(now())
+  Plan                 Plan?     @relation(fields: [plan], references: [id])
+  User                 User?     @relation(fields: [user], references: [id])
+
+  @@index([plan])
+}
+
+model Credit {
+  id        String    @id @default(cuid())
+  user      String?   @unique
+  amount    Int?      @default(0)
+  createdAt DateTime? @default(now())
+  updatedAt DateTime? @default(now())
+  User      User?     @relation(fields: [user], references: [id])
+}
+
+model Track {
+  id                                           String            @id @default(cuid())
+  title                                        String            @default("")
+  trackFile_filesize                           Int?
+  trackFile_filename                           String?
+  coverImage_id                                String?
+  coverImage_filesize                          Int?
+  coverImage_width                             Int?
+  coverImage_height                            Int?
+  coverImage_extension                         String?
+  bpm                                          Int?              @default(0)
+  camelo                                       String?           @default("1A")
+  energyLevel                                  String?
+  format                                       String            @default("")
+  tag                                          Int?
+  createdAt                                    DateTime?         @default(now())
+  updatedAt                                    DateTime?         @default(now())
+  downloadCount                                Int?              @default(0)
+  jsonData                                     Json?             @map("json")
+  teaserUrl                                    String            @default("")
+  isMix                                        Boolean           @default(false)
+  user                                         String?
+  trackPreview_filename                        String?
+  trackPreview_filesize                        Int?
+  description                                  Json              @default("[{\"type\": \"paragraph\", \"children\": [{\"text\": \"\"}]}]")
+  editTitle                                    String            @default("")
+  originalArtist                               String            @default("")
+  exclusive                                    Boolean           @default(false)
+  soundcloudURL                                String            @default("")
+  rating                                       Float?            @default(7)
+  trackWav_filename                            String?
+  trackWav_filesize                            Int?
+  accapella                                    String            @default("")
+  instrumental                                 String            @default("")
+  hypeditURL                                   String            @default("")
+  style                                        Json              @default("[]")
+  mood                                         Json              @default("[]")
+  univers                                      Json              @default("[]")
+  under200                                     Boolean           @default(false)
+  duration                                     Float?            @default(0)
+  SousLabel                                    String            @default("")
+  acapInAcapOutMain_filename                   String?
+  acapInAcapOutMain_filesize                   Int?
+  acapIn_filename                              String?
+  acapIn_filesize                              Int?
+  acapOut_filename                             String?
+  acapOut_filesize                             Int?
+  acapella_filename                            String?
+  acapella_filesize                            Int?
+  album                                        String            @default("")
+  artistOnTitle                                String            @default("")
+  clapInMain_filename                          String?
+  clapInMain_filesize                          Int?
+  clapInShortAcapOut_filename                  String?
+  clapInShortAcapOut_filesize                  Int?
+  extendedTrackMp3Clean_filename               String?
+  extendedTrackMp3Clean_filesize               Int?
+  extendedTrackMp3Dirty_filename               String?
+  extendedTrackMp3Dirty_filesize               Int?
+  extendedTrackMp3_filename                    String?
+  extendedTrackMp3_filesize                    Int?
+  extendedTrackWaveClean_filename              String?
+  extendedTrackWaveClean_filesize              Int?
+  extendedTrackWaveDirty_filename              String?
+  extendedTrackWaveDirty_filesize              Int?
+  extendedTrackWave_filename                   String?
+  extendedTrackWave_filesize                   Int?
+  instru_filename                              String?
+  instru_filesize                              Int?
+  intro_filename                               String?
+  intro_filesize                               Int?
+  isOriginal                                   Boolean           @default(false)
+  key                                          String            @default("")
+  label                                        String?
+  originalTrackMp3Clean_filename               String?
+  originalTrackMp3Clean_filesize               Int?
+  originalTrackMp3Dirty_filename               String?
+  originalTrackMp3Dirty_filesize               Int?
+  originalTrackMp3Main_filename                String?
+  originalTrackMp3Main_filesize                Int?
+  originalTrackMp3_filename                    String?
+  originalTrackMp3_filesize                    Int?
+  originalTrackWaveClean_filename              String?
+  originalTrackWaveClean_filesize              Int?
+  originalTrackWaveDirty_filename              String?
+  originalTrackWaveDirty_filesize              Int?
+  originalTrackWave_filename                   String?
+  originalTrackWave_filesize                   Int?
+  releaseDate                                  String            @default("")
+  shortAcapIn_filename                         String?
+  shortAcapIn_filesize                         Int?
+  shortAcapOut_filename                        String?
+  shortAcapOut_filesize                        Int?
+  shortClapIn_filename                         String?
+  shortClapIn_filesize                         Int?
+  shortMain_filename                           String?
+  shortMain_filesize                           Int?
+  short_filename                               String?
+  short_filesize                               Int?
+  single                                       Boolean           @default(false)
+  slamDirtyMain_filename                       String?
+  slamDirtyMain_filesize                       Int?
+  slamIntroShortAcapOut_filename               String?
+  slamIntroShortAcapOut_filesize               Int?
+  superShort_filename                          String?
+  superShort_filesize                          Int?
+  trackId                                      String            @default("")
+  previewJson                                  Json?
+  status                                       String?           @default("pending")
+  statusReason                                 String            @default("")
+  listeningsCount                              Int?              @default(0)
+  ISRC                                         String            @default("")
+  appleMusicPlaylistCount                      Int?
+  appleMusicStreams                            BigInt?
+  chartPeakCountry                             String            @default("")
+  chartPeakPosition                            Int?
+  deezerStreams                                BigInt?
+  shazamCount                                  Int?
+  songstatsLastUpdated                         DateTime?
+  songstatsTrackId                             String            @default("")
+  spotifyPlaylistCount                         Int?
+  spotifyPlaylistReach                         BigInt?
+  spotifyStreams                               BigInt?
+  tiktokCreations                              Int?
+  tiktokViews                                  BigInt?
+  youtubeViews                                 BigInt?
+  acapInAcapOutMainWav_filename                String?
+  acapInAcapOutMainWav_filesize                Int?
+  acapInWav_filename                           String?
+  acapInWav_filesize                           Int?
+  acapOutWav_filename                          String?
+  acapOutWav_filesize                          Int?
+  acapellaWav_filename                         String?
+  acapellaWav_filesize                         Int?
+  clapInMainWav_filename                       String?
+  clapInMainWav_filesize                       Int?
+  clapInShortAcapOutWav_filename               String?
+  clapInShortAcapOutWav_filesize               Int?
+  instruWav_filename                           String?
+  instruWav_filesize                           Int?
+  introWav_filename                            String?
+  introWav_filesize                            Int?
+  shortAcapInWav_filename                      String?
+  shortAcapInWav_filesize                      Int?
+  shortAcapOutWav_filename                     String?
+  shortAcapOutWav_filesize                     Int?
+  shortClapInWav_filename                      String?
+  shortClapInWav_filesize                      Int?
+  shortMainWav_filename                        String?
+  shortMainWav_filesize                        Int?
+  shortWav_filename                            String?
+  shortWav_filesize                            Int?
+  slamDirtyMainWav_filename                    String?
+  slamDirtyMainWav_filesize                    Int?
+  slamIntroShortAcapOutWav_filename            String?
+  slamIntroShortAcapOutWav_filesize            Int?
+  superShortWav_filename                       String?
+  superShortWav_filesize                       Int?
+  Download                                     Download[]
+  Like                                         Like[]
+  Listened                                     Listened[]
+  Mix                                          Mix[]
+  Sample                                       Sample[]
+  User                                         User?             @relation(fields: [user], references: [id])
+  VIPLike                                      VIPLike[]
+  Album                                        Album[]           @relation("Album_Tracks")
+  Artist                                       Artist[]          @relation("Artist_tracks")
+  OriginalTrack                                OriginalTrack[]   @relation("OriginalTrack_originalLink")
+  Playlist                                     Playlist[]        @relation("Playlist_tracks")
+  PressKit                                     PressKit[]        @relation("PressKit_tracks")
+  ReferenceArtist_ReferenceArtist_accapella    ReferenceArtist[] @relation("ReferenceArtist_accapella")
+  ReferenceArtist_ReferenceArtist_instrumental ReferenceArtist[] @relation("ReferenceArtist_instrumental")
+  ReferenceArtist                              ReferenceArtist[] @relation("ReferenceArtist_tracks")
+  Search                                       Search[]          @relation("Search_track")
+  Tag                                          Tag[]             @relation("Tag_tracks")
+  Track_A                                      Track[]           @relation("Track_linkedTracks")
+  Track_B                                      Track[]           @relation("Track_linkedTracks")
+  UniversDetail                                UniversDetail[]   @relation("Track_universDetails")
+
+  // PERFORMANCE INDEXES for high-throughput lookups
+  @@index([user])
+  @@index([trackId]) // Critical: lookup by trackId on every request
+  @@index([ISRC]) // For Songstats lookups
+  @@index([createdAt]) // For sorting by date
+  @@index([title]) // For search queries
+  @@index([status]) // For filtering by status
+}
+
+model Tag {
+  id    String  @id @default(cuid())
+  name  String  @default("")
+  Track Track[] @relation("Tag_tracks")
+  User  User[]  @relation("Tag_users")
+}
+
+model Mix {
+  id                   String    @id @default(cuid())
+  user                 String?
+  title                String    @default("")
+  tracks               String?
+  bpmRange             String    @default("")
+  mixType              String    @default("")
+  description          String    @default("")
+  coverImage_id        String?
+  coverImage_filesize  Int?
+  coverImage_width     Int?
+  coverImage_height    Int?
+  coverImage_extension String?
+  tracklist            Json?
+  genre                String    @default("")
+  createdAt            DateTime? @default(now())
+  updatedAt            DateTime? @default(now())
+  mixTrackList         String    @default("")
+  Track                Track?    @relation(fields: [tracks], references: [id])
+  User                 User?     @relation(fields: [user], references: [id])
+  Artist               Artist[]  @relation("Artist_mixes")
+
+  @@index([user])
+  @@index([tracks])
+}
+
+model Blog {
+  id              String    @id @default(cuid())
+  user            String?
+  title           String    @default("")
+  excerpt         String    @default("")
+  image_id        String?
+  image_filesize  Int?
+  image_width     Int?
+  image_height    Int?
+  image_extension String?
+  publishedAt     DateTime? @default(now())
+  createdAt       DateTime? @default(now())
+  updatedAt       DateTime? @default(now())
+  content         Json      @default("[{\"type\": \"paragraph\", \"children\": [{\"text\": \"\"}]}]")
+  User            User?     @relation(fields: [user], references: [id])
+
+  @@index([user])
+}
+
+model Download {
+  id        String    @id @default(cuid())
+  user      String?
+  track     String?
+  createdAt DateTime? @default(now())
+  updatedAt DateTime? @default(now())
+  Track     Track?    @relation(fields: [track], references: [id])
+  User      User?     @relation(fields: [user], references: [id])
+
+  @@index([track])
+  @@index([user])
+}
+
+model Playlist {
+  id                     String    @id @default(cuid())
+  title                  String    @default("")
+  energyLevel            String    @default("")
+  createdAt              DateTime? @default(now())
+  updatedAt              DateTime? @default(now())
+  cover_id               String?
+  cover_filesize         Int?
+  cover_width            Int?
+  cover_height           Int?
+  cover_extension        String?
+  slug                   String    @unique @default("")
+  description            String    @default("")
+  isHighlighted          Boolean   @default(false)
+  duration               Float?    @default(0)
+  isBloc                 Boolean   @default(false)
+  jsonData               Json?     @map("json")
+  mixFile_filename       String?
+  mixFile_filesize       Int?
+  user                   String?
+  color                  String    @default("")
+  isPublic               Boolean   @default(false)
+  category               String?
+  styles                 Json      @default("[]")
+  previewCover_extension String?
+  previewCover_filesize  Int?
+  previewCover_height    Int?
+  previewCover_id        String?
+  previewCover_width     Int?
+  User                   User?     @relation(fields: [user], references: [id])
+  Artist                 Artist[]  @relation("Artist_playlists")
+  Track                  Track[]   @relation("Playlist_tracks")
+
+  @@index([user])
+}
+
+model CommunicationPreference {
+  id       String  @id @default(cuid())
+  user     String? @unique
+  email    Boolean @default(true)
+  whatsapp Boolean @default(false)
+  User     User?   @relation(fields: [user], references: [id])
+}
+
+model Like {
+  id             String    @id @default(cuid())
+  user           String?
+  track          String?
+  userId_trackId String    @unique @default("")
+  createdAt      DateTime? @default(now())
+  updatedAt      DateTime? @default(now())
+  Track          Track?    @relation(fields: [track], references: [id])
+  User           User?     @relation(fields: [user], references: [id])
+
+  @@index([track])
+  @@index([user])
+}
+
+model Plan {
+  id                  String         @id @default(cuid())
+  name                String         @default("")
+  description         String         @default("")
+  monthlyPrice        Float?
+  yearlyPrice         Float?
+  stripeMonthlyUrl    String         @default("")
+  stripeYearlyUrl     String         @default("")
+  stripeMonlthlyId    String         @unique @default("")
+  stripeyearlyId      String         @unique @default("")
+  createdAt           DateTime?      @default(now())
+  updatedAt           DateTime?      @default(now())
+  montlyAmount        Int?
+  yearlyAmount        Int?
+  basePrice           Float?
+  promoCode           String         @default("")
+  stripeMonlthlyIdEUR String         @unique @default("")
+  stripeyearlyIdEUR   String         @unique @default("")
+  Subscription        Subscription[]
+}
+
+model Artist {
+  id                      String            @id @default(cuid())
+  name                    String            @default("")
+  description             String            @default("")
+  style                   String            @default("")
+  image_id                String?
+  image_filesize          Int?
+  image_width             Int?
+  image_height            Int?
+  image_extension         String?
+  createdAt               DateTime?         @default(now())
+  updatedAt               DateTime?         @default(now())
+  presskitURL             String            @default("")
+  email                   String            @default("")
+  instagramUrl            String            @default("")
+  phone                   String            @default("")
+  soundcloudURL           String            @default("")
+  spotifyURL              String            @default("")
+  websiteUrl              String            @default("")
+  uniqueName              String            @default("")
+  paragraph1              String            @default("")
+  paragraph2              String            @default("")
+  info1                   String            @default("")
+  info2                   String            @default("")
+  imagePressKit_extension String?
+  imagePressKit_filesize  Int?
+  imagePressKit_height    Int?
+  imagePressKit_id        String?
+  imagePressKit_width     Int?
+  artistType              String?
+  soundcloud              Boolean           @default(false)
+  age                     String            @default("")
+  averageRating           Float?            @default(7)
+  city                    String            @default("")
+  country                 String            @default("")
+  tiktokUrl               String            @default("")
+  twitterUrl              String            @default("")
+  image1_extension        String?
+  image1_filesize         Int?
+  image1_height           Int?
+  image1_id               String?
+  image1_width            Int?
+  image2_extension        String?
+  image2_filesize         Int?
+  image2_height           Int?
+  image2_id               String?
+  image2_width            Int?
+  image3_extension        String?
+  image3_filesize         Int?
+  image3_height           Int?
+  image3_id               String?
+  image3_width            Int?
+  image4_extension        String?
+  image4_filesize         Int?
+  image4_height           Int?
+  image4_id               String?
+  image4_width            Int?
+  image5_extension        String?
+  image5_filesize         Int?
+  image5_height           Int?
+  image5_id               String?
+  image5_width            Int?
+  image6_extension        String?
+  image6_filesize         Int?
+  image6_height           Int?
+  image6_id               String?
+  image6_width            Int?
+  image7_extension        String?
+  image7_filesize         Int?
+  image7_height           Int?
+  image7_id               String?
+  image7_width            Int?
+  image8_extension        String?
+  image8_filesize         Int?
+  image8_height           Int?
+  image8_id               String?
+  image8_width            Int?
+  image9_extension        String?
+  image9_filesize         Int?
+  image9_height           Int?
+  image9_id               String?
+  image9_width            Int?
+  youtubeUrl              String            @default("")
+  horizontalYoutubeUrl    String            @default("")
+  verticalYoutubeUrl      String            @default("")
+  isHighLight             Boolean           @default(false)
+  firstName               String            @default("")
+  lastName                String            @default("")
+  isValidatedByAdmin      Boolean           @default(false)
+  downloadsCount          Int?              @default(0)
+  listeningsCount         Int?              @default(0)
+  tracksList              String            @default("")
+  Mix                     Mix[]             @relation("Artist_mixes")
+  Playlist                Playlist[]        @relation("Artist_playlists")
+  ProducerRequest         ProducerRequest[] @relation("Artist_producerRequests")
+  Search                  Search[]          @relation("Artist_search")
+  Track                   Track[]           @relation("Artist_tracks")
+  User                    User[]            @relation("Artist_users")
+
+  // PERFORMANCE INDEX for artist name lookups
+  @@index([name])
+}
+
+model Bill {
+  id        String    @id @default(cuid())
+  user      String?
+  createdAt DateTime? @default(now())
+  updatedAt DateTime? @default(now())
+  User      User?     @relation(fields: [user], references: [id])
+  Extra     Extra[]
+
+  @@index([user])
+}
+
+model Extra {
+  id          String    @id @default(cuid())
+  bill        String?
+  name        String    @default("")
+  description String    @default("")
+  price       Float?
+  amount      Int?
+  stripeId    String    @unique @default("")
+  createdAt   DateTime? @default(now())
+  updatedAt   DateTime? @default(now())
+  Bill        Bill?     @relation(fields: [bill], references: [id])
+
+  @@index([bill])
+}
+
+model VIPLike {
+  id             String  @id @default(cuid())
+  user           String?
+  track          String?
+  userId_trackId String  @unique @default("")
+  Track          Track?  @relation(fields: [track], references: [id])
+  User           User?   @relation(fields: [user], references: [id])
+
+  @@index([track])
+  @@index([user])
+}
+
+model Listened {
+  id             String    @id @default(cuid())
+  user           String?
+  track          String?
+  userId_trackId String    @unique @default("")
+  createdAt      DateTime? @default(now())
+  updatedAt      DateTime? @default(now())
+  Track          Track?    @relation(fields: [track], references: [id])
+  User           User?     @relation(fields: [user], references: [id])
+
+  @@index([track])
+  @@index([user])
+}
+
+model UnlaunchedUser {
+  id        String    @id @default(cuid())
+  email     String    @default("")
+  createdAt DateTime? @default(now())
+  updatedAt DateTime? @default(now())
+}
+
+model ReferenceArtist {
+  id                                 String          @id
+  name                               String          @default("")
+  image_id                           String?
+  image_filesize                     Int?
+  image_width                        Int?
+  image_height                       Int?
+  image_extension                    String?
+  country                            String          @default("")
+  flag                               String          @default("")
+  popularity                         Int?
+  styles                             Json            @default("[]")
+  topSongs                           String          @default("")
+  city                               String          @default("")
+  description                        String          @default("")
+  appleMusicFollowers                BigInt?
+  instagramFollowers                 BigInt?
+  songstatsArtistId                  String          @default("")
+  songstatsLastUpdated               DateTime?
+  spotifyFollowers                   BigInt?
+  spotifyMonthlyListeners            BigInt?
+  tiktokFollowers                    BigInt?
+  youtubeSubscribers                 BigInt?
+  Album                              Album[]         @relation("Album_artiste")
+  OriginalTrack                      OriginalTrack[] @relation("OriginalTrack_referenceArtist")
+  Track_ReferenceArtist_accapella    Track[]         @relation("ReferenceArtist_accapella")
+  Track_ReferenceArtist_instrumental Track[]         @relation("ReferenceArtist_instrumental")
+  Track                              Track[]         @relation("ReferenceArtist_tracks")
+
+  // PERFORMANCE INDEX for reference artist name lookups
+  @@index([name])
+}
+
+model Search {
+  id        String    @id @default(cuid())
+  text      String    @default("")
+  type      String    @default("")
+  createdAt DateTime? @default(now())
+  updatedAt DateTime? @default(now())
+  Artist    Artist[]  @relation("Artist_search")
+  Track     Track[]   @relation("Search_track")
+  User      User[]    @relation("Search_user")
+}
+
+model BulkDownloadJob {
+  id              String    @id @default(cuid())
+  userId          String    @default("")
+  createdAt       DateTime? @default(now())
+  updatedAt       DateTime?
+  status          String    @default("")
+  downloadUrl     String    @default("")
+  error           String    @default("")
+  trackIds        Json?
+  format          String    @default("")
+  processedTracks Int?      @default(0)
+  progress        Int?      @default(0)
+  totalTracks     Int?      @default(0)
+}
+
+model EventDeduplication {
+  id         String    @id @default(cuid())
+  event_id   String    @unique @default("")
+  event_name String    @default("")
+  source     String    @default("")
+  timestamp  DateTime? @default(now())
+  expires_at DateTime?
+}
+
+model OriginalTrack {
+  id                              String            @id @default(cuid())
+  title                           String            @default("")
+  artistOnTitle                   String            @default("")
+  label                           String?
+  releaseDate                     String            @default("")
+  key                             String            @default("")
+  bpm                             Int?              @default(0)
+  cover_id                        String?
+  cover_filesize                  Int?
+  cover_width                     Int?
+  cover_height                    Int?
+  cover_extension                 String?
+  originalTrackMp3_filesize       Int?
+  originalTrackMp3_filename       String?
+  originalTrackWave_filesize      Int?
+  originalTrackWave_filename      String?
+  extendedTrackMp3_filesize       Int?
+  extendedTrackMp3_filename       String?
+  extendedTrackWave_filesize      Int?
+  extendedTrackWave_filename      String?
+  acapIn_filesize                 Int?
+  acapIn_filename                 String?
+  acapOut_filesize                Int?
+  acapOut_filename                String?
+  intro_filesize                  Int?
+  intro_filename                  String?
+  short_filesize                  Int?
+  short_filename                  String?
+  acapella_filesize               Int?
+  acapella_filename               String?
+  acapInAcapOutMain_filename      String?
+  acapInAcapOutMain_filesize      Int?
+  clapInMain_filename             String?
+  clapInMain_filesize             Int?
+  extendedTrackMp3Clean_filename  String?
+  extendedTrackMp3Clean_filesize  Int?
+  extendedTrackMp3Dirty_filename  String?
+  extendedTrackMp3Dirty_filesize  Int?
+  extendedTrackWaveClean_filename String?
+  extendedTrackWaveClean_filesize Int?
+  extendedTrackWaveDirty_filename String?
+  extendedTrackWaveDirty_filesize Int?
+  instru_filename                 String?
+  instru_filesize                 Int?
+  originalTrackMp3Clean_filename  String?
+  originalTrackMp3Clean_filesize  Int?
+  originalTrackMp3Dirty_filename  String?
+  originalTrackMp3Dirty_filesize  Int?
+  shortAcapIn_filename            String?
+  shortAcapIn_filesize            Int?
+  shortClapIn_filename            String?
+  shortClapIn_filesize            Int?
+  shortMain_filename              String?
+  shortMain_filesize              Int?
+  slamDirtyMain_filename          String?
+  slamDirtyMain_filesize          Int?
+  style                           Json              @default("[]")
+  superShort_filename             String?
+  superShort_filesize             Int?
+  SousLabel                       String            @default("")
+  album                           String            @default("")
+  originalTrackMp3Main_filename   String?
+  originalTrackMp3Main_filesize   Int?
+  originalTrackWaveClean_filename String?
+  originalTrackWaveClean_filesize Int?
+  originalTrackWaveDirty_filename String?
+  originalTrackWaveDirty_filesize Int?
+  clapInShortAcapOut_filename     String?
+  clapInShortAcapOut_filesize     Int?
+  shortAcapOut_filename           String?
+  shortAcapOut_filesize           Int?
+  single                          Boolean           @default(false)
+  slamIntroShortAcapOut_filename  String?
+  slamIntroShortAcapOut_filesize  Int?
+  Album                           Album[]           @relation("Album_originalTracks")
+  Track                           Track[]           @relation("OriginalTrack_originalLink")
+  ReferenceArtist                 ReferenceArtist[] @relation("OriginalTrack_referenceArtist")
+}
+
+model Album {
+  id              String            @id @default(cuid())
+  nomAlbum        String            @default("")
+  cover_id        String?
+  cover_filesize  Int?
+  cover_width     Int?
+  cover_height    Int?
+  cover_extension String?
+  releaseDate     String            @default("")
+  major           String?
+  sousLabel       String            @default("")
+  Track           Track[]           @relation("Album_Tracks")
+  ReferenceArtist ReferenceArtist[] @relation("Album_artiste")
+  OriginalTrack   OriginalTrack[]   @relation("Album_originalTracks")
+
+  // PERFORMANCE INDEX for album name lookups
+  @@index([nomAlbum])
+}
+
+model ForumCategory {
+  id         String       @id @default(cuid())
+  label      String       @default("")
+  slug       String       @unique @default("")
+  createdAt  DateTime?    @default(now())
+  updatedAt  DateTime?
+  ForumPost  ForumPost[]
+  ForumVideo ForumVideo[]
+}
+
+model ForumComment {
+  id                 String         @id @default(cuid())
+  post               String?
+  author             String?
+  content            String         @default("")
+  likesCount         Int?           @default(0)
+  savesCount         Int?           @default(0)
+  createdAt          DateTime?      @default(now())
+  updatedAt          DateTime?
+  responseTo         String?
+  isMainAnswer       Boolean        @default(false)
+  User               User?          @relation(fields: [author], references: [id])
+  ForumPost          ForumPost?     @relation(fields: [post], references: [id])
+  ForumComment       ForumComment?  @relation("ForumCommentToForumComment", fields: [responseTo], references: [id])
+  other_ForumComment ForumComment[] @relation("ForumCommentToForumComment")
+
+  @@index([author])
+  @@index([post])
+  @@index([responseTo])
+}
+
+model ForumPost {
+  id                   String                 @id @default(cuid())
+  title                String                 @default("")
+  content              String                 @default("")
+  mediaImage_id        String?
+  mediaImage_filesize  Int?
+  mediaImage_width     Int?
+  mediaImage_height    Int?
+  mediaImage_extension String?
+  category             String?
+  author               String?
+  likesCount           Int?                   @default(0)
+  commentsCount        Int?                   @default(0)
+  savesCount           Int?                   @default(0)
+  createdAt            DateTime?              @default(now())
+  updatedAt            DateTime?
+  isVerified           Boolean                @default(false)
+  isValidatedByAdmin   Boolean                @default(false)
+  ForumComment         ForumComment[]
+  User                 User?                  @relation(fields: [author], references: [id])
+  ForumCategory        ForumCategory?         @relation(fields: [category], references: [id])
+  InteractionForumPost InteractionForumPost[]
+
+  @@index([author])
+  @@index([category])
+}
+
+model ForumVideo {
+  id                     String         @id @default(cuid())
+  title                  String         @default("")
+  url                    String         @default("")
+  description            String         @default("")
+  category               String?
+  author                 String?
+  createdAt              DateTime?      @default(now())
+  updatedAt              DateTime?
+  thumbnailUrl_extension String?
+  thumbnailUrl_filesize  Int?
+  thumbnailUrl_height    Int?
+  thumbnailUrl_id        String?
+  thumbnailUrl_width     Int?
+  User                   User?          @relation(fields: [author], references: [id])
+  ForumCategory          ForumCategory? @relation(fields: [category], references: [id])
+
+  @@index([author])
+  @@index([category])
+}
+
+model InteractionForumPost {
+  id        String     @id @default(cuid())
+  post      String?
+  user      String?
+  createdAt DateTime?  @default(now())
+  updatedAt DateTime?
+  type      String?
+  ForumPost ForumPost? @relation(fields: [post], references: [id])
+  User      User?      @relation(fields: [user], references: [id])
+
+  @@index([post])
+  @@index([user])
+}
+
+model ProducerRequest {
+  id                String    @id @default(cuid())
+  email             String    @default("")
+  createdAt         DateTime? @default(now())
+  updatedAt         DateTime?
+  bio               String    @default("")
+  birthDate         DateTime?
+  city              String    @default("")
+  country           String    @default("")
+  djName            String    @default("")
+  facebookUrl       String    @default("")
+  firstName         String    @default("")
+  image1_extension  String?
+  image1_filesize   Int?
+  image1_height     Int?
+  image1_id         String?
+  image1_width      Int?
+  image2_extension  String?
+  image2_filesize   Int?
+  image2_height     Int?
+  image2_id         String?
+  image2_width      Int?
+  image3_extension  String?
+  image3_filesize   Int?
+  image3_height     Int?
+  image3_id         String?
+  image3_width      Int?
+  instagramUrl      String    @default("")
+  lastName          String    @default("")
+  linkedinUrl       String    @default("")
+  phone             String    @default("")
+  style             String    @default("")
+  tiktokUrl         String    @default("")
+  twitterUrl        String    @default("")
+  videoLandscapeUrl String    @default("")
+  videoPortraitUrl  String    @default("")
+  websiteUrl        String    @default("")
+  youtubeUrl        String    @default("")
+  isAccepted        Boolean   @default(false)
+  validationActions String    @default("")
+  Artist            Artist[]  @relation("Artist_producerRequests")
+  User              User[]    @relation("ProducerRequest_user")
+}
+
+model Accessory {
+  id               String             @id
+  name             String             @default("")
+  image_id         String?
+  image_filesize   Int?
+  image_width      Int?
+  image_height     Int?
+  image_extension  String?
+  createdAt        DateTime?          @default(now())
+  updatedAt        DateTime?          @default(now())
+  PressInformation PressInformation[] @relation("Accessory_pressInformation")
+  PressKit         PressKit[]         @relation("PressKit_accessory")
+}
+
+model Console {
+  id               String            @id
+  name             String            @default("")
+  image_id         String?
+  image_filesize   Int?
+  image_width      Int?
+  image_height     Int?
+  image_extension  String?
+  pressInformation String?           @unique
+  createdAt        DateTime?         @default(now())
+  updatedAt        DateTime?         @default(now())
+  PressInformation PressInformation? @relation(fields: [pressInformation], references: [id])
+  PressKit         PressKit[]        @relation("PressKit_consoles")
+}
+
+model Microphone {
+  id               String             @id
+  name             String             @default("")
+  image_id         String?
+  image_filesize   Int?
+  image_width      Int?
+  image_height     Int?
+  image_extension  String?
+  createdAt        DateTime?          @default(now())
+  updatedAt        DateTime?          @default(now())
+  PressInformation PressInformation[] @relation("Microphone_pressInformation")
+  PressKit         PressKit[]         @relation("PressKit_microphone")
+}
+
+model Mixer {
+  id               String             @id
+  name             String             @default("")
+  image_id         String?
+  image_filesize   Int?
+  image_width      Int?
+  image_height     Int?
+  image_extension  String?
+  createdAt        DateTime?          @default(now())
+  updatedAt        DateTime?          @default(now())
+  PressInformation PressInformation[] @relation("Mixer_pressInformation")
+  PressKit         PressKit[]         @relation("PressKit_mixer")
+}
+
+model PressInformation {
+  id                             String       @id
+  user                           String?      @unique
+  headshot_id                    String?
+  headshot_filesize              Int?
+  headshot_width                 Int?
+  headshot_height                Int?
+  headshot_extension             String?
+  mainPromotionalPhoto_id        String?
+  mainPromotionalPhoto_filesize  Int?
+  mainPromotionalPhoto_width     Int?
+  mainPromotionalPhoto_height    Int?
+  mainPromotionalPhoto_extension String?
+  livePerformancePhoto_id        String?
+  livePerformancePhoto_filesize  Int?
+  livePerformancePhoto_width     Int?
+  livePerformancePhoto_height    Int?
+  livePerformancePhoto_extension String?
+  studioLifeStylePhoto_id        String?
+  studioLifeStylePhoto_filesize  Int?
+  studioLifeStylePhoto_width     Int?
+  studioLifeStylePhoto_height    Int?
+  studioLifeStylePhoto_extension String?
+  artwork_id                     String?
+  artwork_filesize               Int?
+  artwork_width                  Int?
+  artwork_height                 Int?
+  artwork_extension              String?
+  otherPhoto1_id                 String?
+  otherPhoto1_filesize           Int?
+  otherPhoto1_width              Int?
+  otherPhoto1_height             Int?
+  otherPhoto1_extension          String?
+  otherPhoto2_id                 String?
+  otherPhoto2_filesize           Int?
+  otherPhoto2_width              Int?
+  otherPhoto2_height             Int?
+  otherPhoto2_extension          String?
+  otherPhoto3_id                 String?
+  otherPhoto3_filesize           Int?
+  otherPhoto3_width              Int?
+  otherPhoto3_height             Int?
+  otherPhoto3_extension          String?
+  transportation                 String       @default("")
+  liquor                         String       @default("")
+  hotel                          String       @default("")
+  security                       String       @default("")
+  guestList                      String       @default("")
+  otherInformation1              String       @default("")
+  otherInformation2              String       @default("")
+  otherInformation3              String       @default("")
+  otherInformation4              String       @default("")
+  createdAt                      DateTime?    @default(now())
+  updatedAt                      DateTime?    @default(now())
+  Console                        Console?
+  User                           User?        @relation(fields: [user], references: [id])
+  Accessory                      Accessory[]  @relation("Accessory_pressInformation")
+  Microphone                     Microphone[] @relation("Microphone_pressInformation")
+  Mixer                          Mixer[]      @relation("Mixer_pressInformation")
+}
+
+model PressKit {
+  id                                                   String             @id
+  user                                                 String?
+  name                                                 String             @default("")
+  artistName                                           String             @default("")
+  shortBio                                             String             @default("")
+  longBio                                              String             @default("")
+  realName                                             String             @default("")
+  city                                                 String             @default("")
+  age                                                  String             @default("")
+  instagramUrl                                         String             @default("")
+  soundcloudURL                                        String             @default("")
+  spotifyURL                                           String             @default("")
+  youtubeUrl                                           String             @default("")
+  tiktokUrl                                            String             @default("")
+  websiteUrl                                           String             @default("")
+  headshot_id                                          String?
+  headshot_filesize                                    Int?
+  headshot_width                                       Int?
+  headshot_height                                      Int?
+  headshot_extension                                   String?
+  mainPromotionalPhoto_id                              String?
+  mainPromotionalPhoto_filesize                        Int?
+  mainPromotionalPhoto_width                           Int?
+  mainPromotionalPhoto_height                          Int?
+  mainPromotionalPhoto_extension                       String?
+  livePerformancePhoto_id                              String?
+  livePerformancePhoto_filesize                        Int?
+  livePerformancePhoto_width                           Int?
+  livePerformancePhoto_height                          Int?
+  livePerformancePhoto_extension                       String?
+  studioLifeStylePhoto_id                              String?
+  studioLifeStylePhoto_filesize                        Int?
+  studioLifeStylePhoto_width                           Int?
+  studioLifeStylePhoto_height                          Int?
+  studioLifeStylePhoto_extension                       String?
+  artwork_id                                           String?
+  artwork_filesize                                     Int?
+  artwork_width                                        Int?
+  artwork_height                                       Int?
+  artwork_extension                                    String?
+  otherPhoto1_id                                       String?
+  otherPhoto1_filesize                                 Int?
+  otherPhoto1_width                                    Int?
+  otherPhoto1_height                                   Int?
+  otherPhoto1_extension                                String?
+  otherPhoto2_id                                       String?
+  otherPhoto2_filesize                                 Int?
+  otherPhoto2_width                                    Int?
+  otherPhoto2_height                                   Int?
+  otherPhoto2_extension                                String?
+  otherPhoto3_id                                       String?
+  otherPhoto3_filesize                                 Int?
+  otherPhoto3_width                                    Int?
+  otherPhoto3_height                                   Int?
+  otherPhoto3_extension                                String?
+  transportation                                       String             @default("")
+  liquor                                               String             @default("")
+  hotel                                                String             @default("")
+  security                                             String             @default("")
+  guestList                                            String             @default("")
+  otherInformation1                                    String             @default("")
+  otherInformation2                                    String             @default("")
+  otherInformation3                                    String             @default("")
+  otherInformation4                                    String             @default("")
+  createdAt                                            DateTime?          @default(now())
+  updatedAt                                            DateTime?          @default(now())
+  template                                             String?
+  email                                                String             @default("")
+  neutralColor                                         String             @default("")
+  phone                                                String             @default("")
+  primaryColor                                         String             @default("")
+  secondaryColor                                       String             @default("")
+  PressKitTemplate                                     PressKitTemplate?  @relation(fields: [template], references: [id])
+  User                                                 User?              @relation(fields: [user], references: [id])
+  PressKitPage                                         PressKitPage[]
+  PressKitPurchase_PressKitPurchase_PressKitToPressKit PressKitPurchase[] @relation("PressKitPurchase_PressKitToPressKit")
+  Accessory                                            Accessory[]        @relation("PressKit_accessory")
+  Console                                              Console[]          @relation("PressKit_consoles")
+  Microphone                                           Microphone[]       @relation("PressKit_microphone")
+  Mixer                                                Mixer[]            @relation("PressKit_mixer")
+  Track                                                Track[]            @relation("PressKit_tracks")
+
+  @@index([user])
+  @@index([template])
+}
+
+model PressKitPage {
+  id       String    @id
+  pressKit String?
+  name     String    @default("")
+  content  Json?
+  PressKit PressKit? @relation(fields: [pressKit], references: [id])
+
+  @@index([pressKit])
+}
+
+model PressKitTemplate {
+  id                   String                 @id
+  name                 String                 @default("")
+  description          String                 @default("")
+  pageCount            Int?                   @default(4)
+  thumbnail_id         String?
+  thumbnail_filesize   Int?
+  thumbnail_width      Int?
+  thumbnail_height     Int?
+  thumbnail_extension  String?
+  createdAt            DateTime?              @default(now())
+  updatedAt            DateTime?
+  PressKit             PressKit[]
+  PressKitTemplatePage PressKitTemplatePage[]
+}
+
+model PressKitTemplatePage {
+  id               String            @id
+  template         String?
+  name             String            @default("")
+  content          Json?
+  PressKitTemplate PressKitTemplate? @relation(fields: [template], references: [id])
+
+  @@index([template])
+}
+
+model Sample {
+  id                 String    @id
+  title              String    @default("")
+  description        String    @default("")
+  cover_id           String?
+  cover_filesize     Int?
+  cover_width        Int?
+  cover_height       Int?
+  cover_extension    String?
+  sampleMp3_filesize Int?
+  sampleMp3_filename String?
+  sampleWav_filesize Int?
+  sampleWav_filename String?
+  jsonData           Json?     @map("json")
+  duration           Float?    @default(0)
+  track              String?
+  bpm                Int?      @default(0)
+  key                String    @default("")
+  createdAt          DateTime? @default(now())
+  updatedAt          DateTime?
+  sampleType         Json      @default("[]")
+  Track              Track?    @relation(fields: [track], references: [id])
+
+  @@index([track])
+}
+
+model PressKitPurchase {
+  id                                           String    @id
+  PressKit                                     String?
+  stripeSessionId                              String    @unique @default("")
+  stripeCustomerId                             String    @default("")
+  email                                        String    @default("")
+  paymentStatus                                String?   @default("pending")
+  amount                                       Int?
+  currency                                     String    @default("usd")
+  createdAt                                    DateTime? @default(now())
+  updatedAt                                    DateTime?
+  PressKit_PressKitPurchase_PressKitToPressKit PressKit? @relation("PressKitPurchase_PressKitToPressKit", fields: [PressKit], references: [id])
+
+  @@index([PressKit])
+}
+
+model UniversDetail {
+  id              String    @id
+  name            String    @default("")
+  description     String    @default("")
+  image_id        String?
+  image_filesize  Int?
+  image_width     Int?
+  image_height    Int?
+  image_extension String?
+  createdAt       DateTime? @default(now())
+  updatedAt       DateTime?
+  Track           Track[]   @relation("Track_universDetails")
+}
+
+
+// Note: Run `prisma db pull` to generate models from existing database
+// Then run `prisma generate` to generate the Python client
+
+// The actual models will be pulled from your existing database
+// This file is a placeholder - run the commands above to populate it

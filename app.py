@@ -1020,6 +1020,41 @@ from datetime import datetime
 API_ENDPOINT = os.environ.get('API_ENDPOINT', 'https://track.idbyrivoli.com/upload')
 API_KEY = os.environ.get('API_KEY', '5X#JP5ifkSm?oE6@haMriYG$j!87BEfX@zg3CxcE')
 
+# =============================================================================
+# DATABASE MODE CONFIGURATION
+# =============================================================================
+# When USE_DATABASE_MODE is True, tracks are created directly in the database
+# instead of calling the external API. This provides better performance and
+# eliminates dependency on the external track service.
+#
+# Required environment variables for database mode:
+#   DATABASE_URL or (DATABASE_HOST, DATABASE_PORT, DATABASE_NAME, DATABASE_USER, DATABASE_PASSWORD)
+#
+# Set USE_DATABASE_MODE=true in environment to enable
+# =============================================================================
+USE_DATABASE_MODE = os.environ.get('USE_DATABASE_MODE', 'true').lower() in ('true', '1', 'yes')
+
+# Initialize database service if in database mode
+_database_service = None
+if USE_DATABASE_MODE:
+    try:
+        from database_service import get_database_service, save_track_to_database, check_database_connection
+        _database_service = get_database_service()
+        if check_database_connection():
+            print("✅ Database mode enabled - tracks will be saved directly to database")
+        else:
+            print("⚠️ Database mode enabled but connection failed - falling back to API mode")
+            USE_DATABASE_MODE = False
+    except ImportError as e:
+        print(f"⚠️ Database service not available: {e}")
+        USE_DATABASE_MODE = False
+    except Exception as e:
+        print(f"⚠️ Database initialization failed: {e}")
+        USE_DATABASE_MODE = False
+
+if not USE_DATABASE_MODE:
+    print("📡 API mode enabled - tracks will be sent to external API")
+
 # Dynamic Public URL handling
 CURRENT_HOST_URL = os.environ.get('PUBLIC_URL', '')
 
@@ -1071,25 +1106,50 @@ def set_public_url():
 
 def send_track_info_to_api(track_data):
     """
-    Sends track information to external API endpoint with authentication.
+    Sends track information to external API endpoint with authentication,
+    OR saves directly to database if USE_DATABASE_MODE is enabled.
     """
+    import json
+    
+    # Log the payload being processed
+    print(f"\n{'='*60}")
+    print(f"📤 TRACK DATA for: {track_data.get('Titre', 'N/A')} ({track_data.get('Format', 'N/A')})")
+    print(f"{'='*60}")
+    print(json.dumps(track_data, indent=2, ensure_ascii=False))
+    print(f"{'='*60}\n")
+    
+    # Use database mode if enabled
+    if USE_DATABASE_MODE:
+        try:
+            result = save_track_to_database(track_data)
+            
+            if 'error' in result:
+                print(f"❌ DATABASE ERROR: {result['error']}")
+                log_message(f"DB ERROR: {track_data['Titre']} - {result['error']}")
+            else:
+                action = result.get('action', 'saved')
+                print(f"✅ DATABASE SUCCESS: {track_data['Titre']} ({track_data['Format']}) [{action}]")
+                log_message(f"DB OK: {track_data['Titre']} ({track_data['Format']}) → {result.get('id', 'N/A')} [{action}]")
+            
+            return result
+            
+        except Exception as e:
+            print(f"❌ DATABASE EXCEPTION: {e}")
+            log_message(f"DB EXCEPTION: {e}")
+            import traceback
+            traceback.print_exc()
+            return {'error': str(e)}
+    
+    # Fall back to API mode
     if not API_ENDPOINT:
         print("⚠️  API_ENDPOINT not configured, skipping API call")
         return
     
     try:
-        import json
         headers = {
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {API_KEY}'
         }
-        
-        # Log the full payload being sent
-        print(f"\n{'='*60}")
-        print(f"📤 API PAYLOAD for: {track_data.get('Titre', 'N/A')} ({track_data.get('Format', 'N/A')})")
-        print(f"{'='*60}")
-        print(json.dumps(track_data, indent=2, ensure_ascii=False))
-        print(f"{'='*60}\n")
         
         response = requests.post(API_ENDPOINT, json=track_data, headers=headers, timeout=30)
         
@@ -3892,6 +3952,56 @@ def list_files():
         if os.path.isdir(subdir_path):
             result[subdir] = os.listdir(subdir_path)
     return jsonify(result)
+
+# =============================================================================
+# DATABASE MODE STATUS
+# =============================================================================
+
+@app.route('/database_status')
+def database_status():
+    """Get the current database mode status and connection info."""
+    status = {
+        'database_mode_enabled': USE_DATABASE_MODE,
+        'api_endpoint': API_ENDPOINT if not USE_DATABASE_MODE else None,
+    }
+    
+    if USE_DATABASE_MODE:
+        try:
+            from database_service import check_database_connection, get_database_service, get_schema_info, test_database_insert
+            db = get_database_service()
+            connected = check_database_connection()
+            status['database_connected'] = connected
+            status['database_host'] = os.environ.get('DATABASE_HOST', 'from DATABASE_URL')
+            status['database_name'] = os.environ.get('DATABASE_NAME', 'from DATABASE_URL')
+            status['database_url_set'] = bool(os.environ.get('DATABASE_URL'))
+            
+            if connected:
+                # Get schema info
+                schema_info = get_schema_info()
+                status['schema'] = {
+                    'track_table_exists': schema_info.get('track_table_exists', False),
+                    'tables_count': len(schema_info.get('tables', [])),
+                    'track_columns_count': len(schema_info.get('track_columns', [])),
+                }
+                
+                # Show some track columns for debugging
+                track_cols = schema_info.get('track_columns', [])
+                status['schema']['sample_columns'] = [c['column_name'] for c in track_cols[:20]]
+                
+                # Test insert capability
+                test_result = test_database_insert()
+                status['insert_test'] = test_result
+                
+        except Exception as e:
+            status['database_connected'] = False
+            status['database_error'] = str(e)
+            import traceback
+            status['traceback'] = traceback.format_exc()
+    else:
+        status['database_connected'] = False
+        status['note'] = 'Database mode disabled - using external API'
+    
+    return jsonify(status)
 
 # =============================================================================
 # BATCH PROCESSING ROUTES

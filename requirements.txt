@@ -17,3 +17,5 @@ scipy
 soundfile
 requests
 openunmix
+# Database support for direct track creation (Prisma Python)
+prisma>=0.13.0
