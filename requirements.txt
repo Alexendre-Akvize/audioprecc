@@ -19,3 +19,6 @@ requests
 openunmix
 # Database support for direct track creation (Prisma Python)
 prisma>=0.13.0
+# S3 storage support
+boto3>=1.28.0
+Pillow>=10.0.0
