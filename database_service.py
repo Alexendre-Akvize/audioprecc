@@ -44,6 +44,15 @@ try:
 except ImportError as e:
     print(f"⚠️ S3 service not available: {e}")
 
+# Try to import waveform generator
+WAVEFORM_AVAILABLE = False
+try:
+    from waveform_generator import generate_waveform_from_url
+    WAVEFORM_AVAILABLE = True
+    print("✅ Waveform generator available")
+except ImportError as e:
+    print(f"⚠️ Waveform generator not available: {e}")
+
 # Type to file field mapping (matching NestJS create-track.dto.ts)
 TYPE_TO_FILE_FIELD_MAP = {
     # Main versions
@@ -602,6 +611,19 @@ class PrismaDatabaseService:
                 if cover_image_data and not existing_track.coverImage_id:
                     update_data.update(cover_image_data)
                 
+                # Generate waveform for Main MP3 if track doesn't have one
+                if WAVEFORM_AVAILABLE and file_field == 'trackFile' and file_url and (not existing_track.jsonData or not existing_track.duration):
+                    try:
+                        print(f"   📊 Generating waveform for existing track...")
+                        waveform_data = generate_waveform_from_url(file_url)
+                        if waveform_data:
+                            # jsonData stores just the peaks array
+                            update_data['jsonData'] = PrismaJson(waveform_data['waveform'])
+                            update_data['duration'] = waveform_data['duration']
+                            print(f"   ✅ Waveform added: {len(waveform_data['waveform'])} peaks, {waveform_data['duration']:.2f}s duration")
+                    except Exception as e:
+                        print(f"   ⚠️ Waveform generation failed: {e}")
+                
                 # Only update empty fields
                 if not existing_track.title:
                     update_data['title'] = base_title
@@ -678,6 +700,19 @@ class PrismaDatabaseService:
                 # Add cover image data if we uploaded one
                 if cover_image_data:
                     create_data.update(cover_image_data)
+                
+                # Generate waveform for Main MP3 tracks
+                if WAVEFORM_AVAILABLE and file_field == 'trackFile' and file_url:
+                    try:
+                        print(f"   📊 Generating waveform...")
+                        waveform_data = generate_waveform_from_url(file_url)
+                        if waveform_data:
+                            # jsonData stores just the peaks array
+                            create_data['jsonData'] = PrismaJson(waveform_data['waveform'])
+                            create_data['duration'] = waveform_data['duration']
+                            print(f"   ✅ Waveform added: {len(waveform_data['waveform'])} peaks, {waveform_data['duration']:.2f}s duration")
+                    except Exception as e:
+                        print(f"   ⚠️ Waveform generation failed: {e}")
                 
                 # Connect artist
                 if matched_artist:
