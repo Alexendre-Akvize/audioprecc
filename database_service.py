@@ -279,12 +279,17 @@ class PrismaDatabaseService:
             return None
         
         is_wav = format and format.upper() in ('WAV', 'WAVE')
+        print(f"   🔍 get_file_field_from_type: type='{track_type}', format='{format}', is_wav={is_wav}")
         
         if track_type.lower() == 'main':
-            return 'trackWav' if is_wav else 'trackFile'
+            field = 'trackWav' if is_wav else 'trackFile'
+            print(f"   🔍 Main type → {field}")
+            return field
         
         if track_type.lower() == 'extended':
-            return 'extendedTrackWave' if is_wav else 'extendedTrackMp3'
+            field = 'extendedTrackWave' if is_wav else 'extendedTrackMp3'
+            print(f"   🔍 Extended type → {field}")
+            return field
         
         base_field = TYPE_TO_FILE_FIELD_MAP.get(track_type)
         if not base_field:
@@ -294,11 +299,15 @@ class PrismaDatabaseService:
                     break
         
         if not base_field:
+            print(f"   🔍 No base_field found for type '{track_type}'")
             return None
         
         if is_wav and base_field in FIELDS_WITH_WAV_VARIANTS:
-            return f"{base_field}Wav"
+            field = f"{base_field}Wav"
+            print(f"   🔍 WAV variant: {base_field} → {field}")
+            return field
         
+        print(f"   🔍 Using base field: {base_field}")
         return base_field
     
     def find_artist_by_name(self, artist_name: str):
@@ -579,6 +588,8 @@ class PrismaDatabaseService:
             
             if existing_track:
                 print(f"   📝 Updating existing track: {existing_track.id}")
+                print(f"   📁 Adding file field: {file_field}_filename = '{file_filename}'")
+                print(f"   📁 Adding file size: {file_field}_filesize = {file_filesize}")
                 
                 # Build update data
                 update_data = {
@@ -640,6 +651,8 @@ class PrismaDatabaseService:
             
             else:
                 print(f"   ➕ Creating new track with trackId: {base_track_id}")
+                print(f"   📁 File field: {file_field}_filename = '{file_filename}'")
+                print(f"   📁 File size: {file_field}_filesize = {file_filesize}")
                 
                 # Build create data
                 create_data = {
