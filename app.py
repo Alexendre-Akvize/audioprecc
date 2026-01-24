@@ -1,4 +1,9 @@
 import os
+
+# Load environment variables from .env file FIRST (before any os.environ.get calls)
+from dotenv import load_dotenv
+load_dotenv()
+
 import subprocess
 import threading
 import shutil
