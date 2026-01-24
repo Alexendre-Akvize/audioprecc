@@ -1072,7 +1072,8 @@ def set_public_url():
     # Priority: X-Forwarded-Host > Host header > existing value
     forwarded_host = request.headers.get('X-Forwarded-Host')
     original_host = request.headers.get('Host')
-    scheme = request.headers.get('X-Forwarded-Proto', 'https')  # Default to https for pods
+    # Default to http since this server typically runs without SSL
+    scheme = request.headers.get('X-Forwarded-Proto', 'http')
     
     # Debug: log all relevant headers on first request
     if not CURRENT_HOST_URL or 'localhost' in CURRENT_HOST_URL:
