@@ -2200,6 +2200,9 @@ track_queue = queue.Queue()
 queue_items = {}
 queue_items_lock = Lock()
 
+# Maximum time an item can stay in 'processing' state before being marked as stale (in seconds)
+MAX_PROCESSING_TIME = 30 * 60  # 30 minutes
+
 def add_to_queue_tracker(filename, session_id):
     """Add item to queue tracker for UI display."""
     with queue_items_lock:
@@ -2208,14 +2211,20 @@ def add_to_queue_tracker(filename, session_id):
             'worker': None,
             'progress': 0,
             'session_id': session_id,
-            'step': 'En attente...'
+            'step': 'En attente...',
+            'added_at': time.time(),
+            'processing_started_at': None
         }
 
 def update_queue_item(filename, status=None, worker=None, progress=None, step=None):
     """Update queue item status."""
     with queue_items_lock:
         if filename in queue_items:
-            if status: queue_items[filename]['status'] = status
+            if status:
+                queue_items[filename]['status'] = status
+                # Track when processing started
+                if status == 'processing':
+                    queue_items[filename]['processing_started_at'] = time.time()
             if worker is not None: queue_items[filename]['worker'] = worker
             if progress is not None: queue_items[filename]['progress'] = progress
             if step: queue_items[filename]['step'] = step
@@ -2226,25 +2235,82 @@ def remove_from_queue_tracker(filename):
         if filename in queue_items:
             del queue_items[filename]
 
+def cleanup_stale_processing_items():
+    """
+    Clean up items that have been stuck in 'processing' state for too long.
+    This handles cases where a worker crashed without proper cleanup.
+    """
+    current_time = time.time()
+    stale_items = []
+    
+    with queue_items_lock:
+        for filename, info in queue_items.items():
+            if info['status'] == 'processing':
+                started_at = info.get('processing_started_at')
+                if started_at and (current_time - started_at) > MAX_PROCESSING_TIME:
+                    stale_items.append(filename)
+    
+    # Mark stale items as failed (outside lock to avoid deadlock)
+    for filename in stale_items:
+        print(f"⚠️ Cleaning up stale processing item: {filename}")
+        with queue_items_lock:
+            if filename in queue_items:
+                session_id = queue_items[filename].get('session_id', 'global')
+                queue_items[filename]['status'] = 'failed'
+                queue_items[filename]['step'] = '❌ Timeout: traitement trop long'
+                queue_items[filename]['worker'] = None
+        
+        # Add to failed files
+        try:
+            add_failed_file(session_id, filename, "Timeout: le traitement a pris trop de temps", None)
+        except:
+            pass
+    
+    return len(stale_items)
+
 def get_queue_items_list():
     """Get list of queue items for UI."""
+    # First, cleanup any stale items
+    cleanup_stale_processing_items()
+    
     with queue_items_lock:
         items = []
+        processing_count = 0
+        
         for filename, info in queue_items.items():
-            items.append({
+            item_data = {
                 'filename': filename,
                 'status': info['status'],
                 'worker': info['worker'],
                 'progress': info['progress'],
                 'step': info['step']
-            })
-        # Sort: processing first, then waiting
-        items.sort(key=lambda x: (0 if x['status'] == 'processing' else 1, x['filename']))
+            }
+            
+            # Safety check: count processing items
+            if info['status'] == 'processing':
+                processing_count += 1
+                # If we have more processing items than workers, something is wrong
+                # Mark excess items as waiting (should not happen with the fixes)
+                if processing_count > NUM_WORKERS:
+                    print(f"⚠️ Too many processing items detected! Resetting {filename} to waiting")
+                    info['status'] = 'waiting'
+                    info['worker'] = None
+                    info['processing_started_at'] = None
+                    item_data['status'] = 'waiting'
+                    item_data['worker'] = None
+            
+            items.append(item_data)
+        
+        # Sort: failed first (for visibility), then processing, then waiting
+        status_order = {'failed': 0, 'processing': 1, 'waiting': 2}
+        items.sort(key=lambda x: (status_order.get(x['status'], 3), x['filename']))
         return items
 
 # Worker thread function
 def worker(worker_id):
     while True:
+        current_filename = None  # Track current file for cleanup on exception
+        current_session_id = 'global'
         try:
             # Wait if batch is paused
             wait_for_batch_resume()
@@ -2262,6 +2328,10 @@ def worker(worker_id):
                 filename = queue_item
                 session_id = 'global'
                 is_retry = False
+            
+            # Store for exception handler cleanup
+            current_filename = filename
+            current_session_id = session_id
             
             # Get session-specific status
             current_status = get_job_status(session_id)
@@ -2304,6 +2374,7 @@ def worker(worker_id):
                 
                 # Don't remove from tracker - keep showing as failed
                 track_queue.task_done()
+                current_filename = None  # Clear so exception handler doesn't double-process
                 if track_queue.empty():
                     current_status['state'] = 'idle'
                     current_status['current_step'] = ''
@@ -2324,10 +2395,12 @@ def worker(worker_id):
                 # Increment batch counter (may trigger pause after BATCH_SIZE tracks)
                 increment_batch_count()
             else:
-                # Keep in tracker as failed - don't remove
+                # Update queue item to show failed status (process_single_track should have done this, but ensure it)
+                update_queue_item(filename, status='failed', progress=0, step=f'❌ {error_msg[:50] if error_msg else "Erreur inconnue"}...')
                 log_message(f"❌ [{session_id}] Worker {worker_id}: Échec pour {filename}: {error_msg}", session_id)
             
             track_queue.task_done()
+            current_filename = None  # Clear so exception handler doesn't double-process
             
             # Reset state to idle if queue is empty
             if track_queue.empty():
@@ -2345,6 +2418,22 @@ def worker(worker_id):
             import traceback
             traceback.print_exc()
             log_message(f"Erreur Worker {worker_id}: {e}")
+            
+            # CRITICAL: Clean up queue_item on exception to prevent "stuck in processing" state
+            if current_filename:
+                try:
+                    error_msg = f"Erreur worker: {str(e)[:100]}"
+                    add_failed_file(current_session_id, current_filename, error_msg, None)
+                    update_queue_item(current_filename, status='failed', progress=0, step=f'❌ Crash: {str(e)[:50]}...')
+                    log_message(f"🔧 [{current_session_id}] Cleaned up crashed item: {current_filename}", current_session_id)
+                except Exception as cleanup_error:
+                    print(f"Worker {worker_id} cleanup error: {cleanup_error}")
+                
+            # Try to mark task as done to prevent queue deadlock
+            try:
+                track_queue.task_done()
+            except ValueError:
+                pass  # task_done called more times than tasks
 
 # Start multiple worker threads
 worker_threads = []
@@ -3453,6 +3542,73 @@ def get_failed_files():
         'failed_files': failed_files,
         'count': len(failed_files),
         'session_id': session_id
+    })
+
+@app.route('/reset_stuck_items', methods=['POST'])
+def reset_stuck_items():
+    """
+    Reset all items stuck in 'processing' state.
+    Use this to recover from a crashed state where items show as processing
+    but no workers are actually working on them.
+    """
+    session_id = get_session_id()
+    reset_count = 0
+    reset_files = []
+    
+    with queue_items_lock:
+        for filename, info in queue_items.items():
+            if info['status'] == 'processing':
+                # Reset to waiting so it can be reprocessed
+                info['status'] = 'waiting'
+                info['worker'] = None
+                info['progress'] = 0
+                info['step'] = 'Reset - En attente...'
+                info['processing_started_at'] = None
+                reset_count += 1
+                reset_files.append(filename)
+    
+    if reset_count > 0:
+        log_message(f"🔄 [{session_id}] Reset {reset_count} stuck processing item(s)", session_id)
+        
+        # Re-queue the items so workers can pick them up again
+        for filename in reset_files:
+            with queue_items_lock:
+                file_session_id = queue_items.get(filename, {}).get('session_id', session_id)
+            track_queue.put({'filename': filename, 'session_id': file_session_id, 'is_retry': True})
+    
+    return jsonify({
+        'message': f'Reset {reset_count} stuck item(s)',
+        'reset': reset_count,
+        'filenames': reset_files,
+        'queue_size': track_queue.qsize()
+    })
+
+@app.route('/queue_debug')
+def queue_debug():
+    """
+    Debug endpoint to inspect the current state of the queue and workers.
+    """
+    with queue_items_lock:
+        items_by_status = {}
+        for filename, info in queue_items.items():
+            status = info['status']
+            if status not in items_by_status:
+                items_by_status[status] = []
+            items_by_status[status].append({
+                'filename': filename,
+                'worker': info.get('worker'),
+                'progress': info.get('progress'),
+                'processing_started_at': info.get('processing_started_at'),
+                'time_processing': round(time.time() - info.get('processing_started_at', time.time())) if info.get('processing_started_at') else None
+            })
+    
+    return jsonify({
+        'total_items': len(queue_items),
+        'queue_size': track_queue.qsize(),
+        'num_workers': NUM_WORKERS,
+        'active_workers': sum(1 for t in worker_threads if t.is_alive()),
+        'items_by_status': items_by_status,
+        'max_processing_time_seconds': MAX_PROCESSING_TIME
     })
 
 @app.route('/system_stats')

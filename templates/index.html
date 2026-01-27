@@ -2835,6 +2835,34 @@
             }
         }
 
+        // Reset stuck processing items - use when items are stuck in "processing" state
+        async function resetStuckItems() {
+            try {
+                const response = await fetch('/reset_stuck_items', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const result = await response.json();
+                if (result.reset > 0) {
+                    // Reset local state for these items
+                    result.filenames.forEach(filename => {
+                        if (allTracks[filename]) {
+                            allTracks[filename].status = 'waiting';
+                            allTracks[filename].progress = 0;
+                            allTracks[filename].worker = null;
+                        }
+                    });
+                    updateFullTrackListUI();
+                    showToast(`🔄 ${result.reset} item(s) remis en file d'attente`);
+                } else {
+                    showToast('Aucun élément bloqué à réinitialiser');
+                }
+            } catch (e) {
+                console.error('Reset stuck items error:', e);
+                showToast('Erreur lors de la réinitialisation');
+            }
+        }
+
         function escapeHtml(text) {
             const div = document.createElement('div');
             div.textContent = text;
@@ -2957,7 +2985,12 @@
             
             // Processing tracks
             if (groups.processing.length > 0) {
-                html += '<div class="track-list-section-header">Processing</div>';
+                // Show warning if more items are processing than workers (indicates stuck items)
+                const isStuck = groups.processing.length > numWorkers;
+                html += `<div class="track-list-section-header"${isStuck ? ' style="color: var(--warning);"' : ''}>
+                    ${isStuck ? '⚠️' : ''} Processing (${groups.processing.length}/${numWorkers} workers)
+                    ${isStuck ? `<button onclick="resetStuckItems()" style="margin-left: 12px; padding: 4px 12px; background: var(--warning); color: black; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">Reset Stuck</button>` : ''}
+                </div>`;
                 groups.processing.forEach(track => {
                     html += renderTrackItem(track);
                 });
