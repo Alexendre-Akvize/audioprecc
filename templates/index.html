@@ -251,6 +251,182 @@
             justify-content: center;
         }
 
+        /* Workflow Mode Selector */
+        .workflow-mode-selector {
+            margin-bottom: 20px;
+            padding: 16px;
+            background: var(--bg-tertiary);
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+        }
+
+        .workflow-mode-label {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 12px;
+            display: block;
+        }
+
+        .workflow-mode-options {
+            display: flex;
+            gap: 8px;
+        }
+
+        .workflow-mode-option {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 14px 16px;
+            background: var(--bg-secondary);
+            border: 2px solid var(--border);
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .workflow-mode-option:hover {
+            border-color: var(--border-hover);
+            background: var(--bg-card);
+        }
+
+        .workflow-mode-option.active {
+            border-color: var(--accent);
+            background: var(--accent-muted);
+        }
+
+        .workflow-mode-option input {
+            display: none;
+        }
+
+        .workflow-mode-icon {
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-tertiary);
+            border-radius: var(--radius-sm);
+            color: var(--text-muted);
+        }
+
+        .workflow-mode-option.active .workflow-mode-icon {
+            background: var(--accent);
+            color: var(--bg-primary);
+        }
+
+        .workflow-mode-text {
+            flex: 1;
+        }
+
+        .workflow-mode-title {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-primary);
+            margin-bottom: 2px;
+        }
+
+        .workflow-mode-desc {
+            font-size: 12px;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+
+        .workflow-mode-option.active .workflow-mode-title {
+            color: var(--text-primary);
+        }
+
+        /* Track Type Selector (for Upload Only mode) */
+        .track-type-selector {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border);
+            display: none;
+        }
+
+        .track-type-selector.visible {
+            display: block;
+        }
+
+        .track-type-auto-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 14px;
+            background: rgba(34, 197, 94, 0.1);
+            border: 1px solid rgba(34, 197, 94, 0.2);
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .track-type-auto-info i {
+            width: 16px;
+            height: 16px;
+            color: var(--success);
+            flex-shrink: 0;
+        }
+
+        .track-type-auto-info strong {
+            color: var(--success);
+        }
+
+        .track-type-override {
+            margin-top: 10px;
+        }
+
+        .track-type-override summary {
+            font-size: 12px;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 6px 0;
+        }
+
+        .track-type-override summary:hover {
+            color: var(--text-secondary);
+        }
+
+        .track-type-override[open] summary {
+            margin-bottom: 8px;
+        }
+
+        .track-type-selector label {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+            display: block;
+        }
+
+        .track-type-select {
+            width: 100%;
+            padding: 10px 14px;
+            font-size: 13px;
+            font-family: inherit;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            color: var(--text-primary);
+            cursor: pointer;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            padding-right: 40px;
+        }
+
+        .track-type-select:hover {
+            border-color: var(--border-hover);
+        }
+
+        .track-type-select:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
         /* Buttons */
         .btn {
             display: inline-flex;
@@ -1445,6 +1621,56 @@
                     </div>
                     <div class="card-body">
                         <form id="uploadForm">
+                            <!-- Workflow Mode Selector -->
+                            <div class="workflow-mode-selector">
+                                <span class="workflow-mode-label">Workflow Mode</span>
+                                <div class="workflow-mode-options">
+                                    <label class="workflow-mode-option active" id="modeProcess" onclick="setWorkflowMode('process')">
+                                        <input type="radio" name="workflowMode" value="process" checked>
+                                        <div class="workflow-mode-icon">
+                                            <i data-lucide="cpu"></i>
+                                        </div>
+                                        <div class="workflow-mode-text">
+                                            <div class="workflow-mode-title">Process Track</div>
+                                            <div class="workflow-mode-desc">Full AI separation + DJ edits</div>
+                                        </div>
+                                    </label>
+                                    <label class="workflow-mode-option" id="modeUpload" onclick="setWorkflowMode('upload')">
+                                        <input type="radio" name="workflowMode" value="upload">
+                                        <div class="workflow-mode-icon">
+                                            <i data-lucide="upload-cloud"></i>
+                                        </div>
+                                        <div class="workflow-mode-text">
+                                            <div class="workflow-mode-title">Upload Only</div>
+                                            <div class="workflow-mode-desc">Direct upload to database (no processing)</div>
+                                        </div>
+                                    </label>
+                                </div>
+                                <!-- Track Type Info (visible only in Upload Only mode) -->
+                                <div class="track-type-selector" id="trackTypeSelector">
+                                    <div class="track-type-auto-info">
+                                        <span>Track type is <strong>auto-detected</strong> from title (Instrumental, Extended, Acapella, etc.)</span>
+                                    </div>
+                                    <details class="track-type-override">
+                                        <summary>Override type manually</summary>
+                                        <label for="trackTypeSelect">Fallback Type (if not detected)</label>
+                                        <select id="trackTypeSelect" class="track-type-select">
+                                            <option value="">Auto-detect</option>
+                                            <option value="Main">Main</option>
+                                            <option value="Extended">Extended</option>
+                                            <option value="Instrumental">Instrumental</option>
+                                            <option value="Acapella">Acapella</option>
+                                            <option value="Original">Original</option>
+                                            <option value="Intro">Intro</option>
+                                            <option value="Short">Short</option>
+                                            <option value="Clap In">Clap In</option>
+                                            <option value="Acap In">Acap In</option>
+                                            <option value="Acap Out">Acap Out</option>
+                                        </select>
+                                    </details>
+                                </div>
+                            </div>
+
                             <div class="upload-zone" id="dropZone">
                                 <div class="upload-icon">
                                     <i data-lucide="music"></i>
@@ -1738,6 +1964,37 @@
         let isUploading = false;
         let lastResultsCount = 0;
         
+        // Workflow mode: 'process' (full AI processing) or 'upload' (direct upload only)
+        let workflowMode = 'process';
+        
+        // Set workflow mode
+        function setWorkflowMode(mode) {
+            workflowMode = mode;
+            
+            // Update UI
+            const processOption = document.getElementById('modeProcess');
+            const uploadOption = document.getElementById('modeUpload');
+            const trackTypeSelector = document.getElementById('trackTypeSelector');
+            const submitBtn = document.getElementById('submitBtn');
+            
+            if (mode === 'process') {
+                processOption.classList.add('active');
+                uploadOption.classList.remove('active');
+                trackTypeSelector.classList.remove('visible');
+                submitBtn.innerHTML = '<i data-lucide="play"></i> Start Processing';
+            } else {
+                processOption.classList.remove('active');
+                uploadOption.classList.add('active');
+                trackTypeSelector.classList.add('visible');
+                submitBtn.innerHTML = '<i data-lucide="upload-cloud"></i> Upload to Database';
+            }
+            
+            // Reinitialize icons
+            lucide.createIcons();
+            
+            console.log('Workflow mode set to:', mode);
+        }
+        
         // Full track tracking system
         // Status: 'selected' | 'uploading' | 'waiting' | 'processing' | 'ready_for_download' | 'completed'
         let allTracks = {}; // { filename: { status: string, progress: number, worker: number|null } }
@@ -2006,9 +2263,9 @@
             return results;
         }
 
-        // Form submit - optimized for 1000+ track batch uploads
-        // With auto-enqueue: files are uploaded AND queued for analysis in one step
-        // This enables parallel upload + processing for better storage efficiency
+        // Form submit - supports two modes:
+        // 1. 'process' - Full AI processing with auto-enqueue (existing workflow)
+        // 2. 'upload' - Direct upload to S3 + database (no processing)
         document.getElementById('uploadForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             if (selectedFiles.length === 0) {
@@ -2021,6 +2278,109 @@
                 return;
             }
 
+            // Route to appropriate upload handler based on workflow mode
+            if (workflowMode === 'upload') {
+                await handleDirectUpload();
+            } else {
+                await handleProcessUpload();
+            }
+        });
+
+        // Direct upload handler - uploads to S3 + database without processing
+        async function handleDirectUpload() {
+            isUploading = true;
+            progressSection.classList.add('active');
+            logPanel.classList.add('active');
+            resultsSection.classList.add('active');
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<i data-lucide="loader-2" class="spin"></i> Uploading to Database...';
+            lucide.createIcons();
+            
+            if (!startTime) startTime = Date.now();
+
+            statusText.textContent = 'Uploading directly to database...';
+            progressLabel.textContent = 'Direct Upload';
+
+            const filesToUpload = [...selectedFiles];
+            const totalFiles = filesToUpload.length;
+            // Get manual track type override (empty = auto-detect)
+            const manualTrackType = document.getElementById('trackTypeSelect').value;
+            
+            // Clear selection immediately
+            selectedFiles = [];
+            updateFileList();
+            
+            addLog(`📤 Starting direct upload of ${totalFiles} files (type: ${manualTrackType || 'auto-detect'})...`, 'info');
+
+            let uploadedCount = 0;
+            let failedCount = 0;
+            
+            // Upload files one by one for direct mode (more reliable)
+            for (let i = 0; i < totalFiles; i++) {
+                const file = filesToUpload[i];
+                const filename = file.name;
+                
+                // Update track status
+                allTracks[filename] = { status: 'uploading', progress: 0, worker: null };
+                updateFullTrackListUI();
+                
+                statusText.textContent = `Uploading ${i + 1}/${totalFiles}: ${filename}`;
+                
+                try {
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    // Only send track_type if manually specified (empty = auto-detect)
+                    if (manualTrackType) {
+                        formData.append('track_type', manualTrackType);
+                    }
+                    
+                    const response = await fetch('/upload_direct', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        uploadedCount++;
+                        allTracks[filename] = { status: 'completed', progress: 100, worker: null };
+                        addLog(`✅ Uploaded: ${result.title} → Database ID: ${result.database_id} [${result.action}]`, 'success');
+                    } else {
+                        failedCount++;
+                        allTracks[filename] = { status: 'failed', progress: 0, worker: null };
+                        addLog(`❌ Failed: ${filename} - ${result.error}`, 'error');
+                    }
+                } catch (error) {
+                    failedCount++;
+                    allTracks[filename] = { status: 'failed', progress: 0, worker: null };
+                    addLog(`❌ Error: ${filename} - ${error.message}`, 'error');
+                }
+                
+                // Update progress
+                const progress = Math.round((i + 1) / totalFiles * 100);
+                progressFill.style.width = progress + '%';
+                progressValue.textContent = progress + '%';
+                updateFullTrackListUI();
+            }
+
+            progressFill.style.width = '100%';
+            progressValue.textContent = '100%';
+            progressLabel.textContent = 'Complete';
+            statusText.textContent = `Direct upload complete: ${uploadedCount} uploaded, ${failedCount} failed`;
+            
+            // Re-enable upload
+            isUploading = false;
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i data-lucide="upload-cloud"></i> Upload to Database';
+            lucide.createIcons();
+            
+            let toastMsg = `${uploadedCount} files uploaded to database`;
+            if (failedCount > 0) toastMsg += `, ${failedCount} failed`;
+            showToast(toastMsg);
+        }
+
+        // Process upload handler - full AI processing workflow (existing)
+        async function handleProcessUpload() {
             isUploading = true;
             progressSection.classList.add('active');
             logPanel.classList.add('active');
@@ -2145,7 +2505,7 @@
             if (skippedCount > 0) toastMsg += `, ${skippedCount} skipped`;
             if (failedCount > 0) toastMsg += `, ${failedCount} failed`;
             showToast(toastMsg);
-        });
+        }
 
         // ==========================================================================
         // TIME ESTIMATION FUNCTIONS
