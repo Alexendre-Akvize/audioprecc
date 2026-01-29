@@ -3435,6 +3435,7 @@ def upload_direct():
     - file: The MP3 file
     - track_type: Optional override for type (auto-detected from title if not provided)
     - format: 'MP3' or 'WAV' (default: auto-detected from file)
+    - skip_waveform: If 'true', skip waveform generation for faster uploads
     """
     if not USE_DATABASE_MODE:
         return jsonify({'error': 'Direct upload requires database mode to be enabled'}), 400
@@ -3450,6 +3451,9 @@ def upload_direct():
     
     # Track type will be auto-detected from title, but can be overridden
     manual_track_type = request.form.get('track_type', None)
+    
+    # Skip waveform generation for faster uploads
+    skip_waveform = request.form.get('skip_waveform', 'false').lower() == 'true'
     
     # Detect format from file extension
     file_ext = os.path.splitext(file.filename)[1].lower()
@@ -3656,10 +3660,10 @@ def upload_direct():
             'TRACK_ID': track_id
         }
         
-        log_message(f"📤 [{session_id}] Sending to database: {track_title} ({format_type})")
+        log_message(f"📤 [{session_id}] Sending to database: {track_title} ({format_type}){' [fast mode]' if skip_waveform else ''}")
         
         # Save to database (this handles S3 upload internally)
-        result = save_track_to_database(track_data)
+        result = save_track_to_database(track_data, skip_waveform=skip_waveform)
         
         if 'error' in result:
             log_message(f"❌ [{session_id}] Database error: {result['error']}")
@@ -3683,7 +3687,8 @@ def upload_direct():
             'action': result.get('action', 'created'),
             'type': track_type,
             'format': format_type,
-            'title': track_title
+            'title': track_title,
+            'skip_waveform': skip_waveform
         })
         
     except Exception as e:
@@ -3714,6 +3719,7 @@ def upload_direct_batch():
     Form parameters:
     - files: Multiple MP3/WAV files
     - track_type: Optional fallback type if auto-detection fails (default: 'Main')
+    - skip_waveform: If 'true', skip waveform generation for faster uploads
     """
     if not USE_DATABASE_MODE:
         return jsonify({'error': 'Direct upload requires database mode to be enabled'}), 400
@@ -3728,6 +3734,7 @@ def upload_direct_batch():
         return jsonify({'error': 'No files selected'}), 400
     
     fallback_track_type = request.form.get('track_type', 'Main')
+    skip_waveform = request.form.get('skip_waveform', 'false').lower() == 'true'
     
     results = []
     success_count = 0
@@ -3868,7 +3875,7 @@ def upload_direct_batch():
             }
             
             # Save to database
-            result = save_track_to_database(track_data)
+            result = save_track_to_database(track_data, skip_waveform=skip_waveform)
             
             if 'error' in result:
                 results.append({
@@ -3883,7 +3890,8 @@ def upload_direct_batch():
                     'success': True,
                     'track_id': result.get('trackId', track_id),
                     'database_id': result.get('id'),
-                    'action': result.get('action', 'created')
+                    'action': result.get('action', 'created'),
+                    'skip_waveform': skip_waveform
                 })
                 success_count += 1
                 add_to_upload_history(safe_filename, session_id, 'completed', track_type)

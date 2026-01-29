@@ -440,8 +440,13 @@ class PrismaDatabaseService:
             print(f"   ⚠️ Album lookup/create failed: {e}")
             return None
     
-    def create_or_update_track(self, track_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Create or update a track using Prisma."""
+    def create_or_update_track(self, track_data: Dict[str, Any], skip_waveform: bool = False) -> Dict[str, Any]:
+        """Create or update a track using Prisma.
+        
+        Args:
+            track_data: Dictionary containing track metadata
+            skip_waveform: If True, skip waveform generation for faster uploads
+        """
         try:
             if not self.connect():
                 return {'error': 'Database connection failed'}
@@ -611,8 +616,8 @@ class PrismaDatabaseService:
                 if cover_image_data and not existing_track.coverImage_id:
                     update_data.update(cover_image_data)
                 
-                # Generate waveform for Main MP3 if track doesn't have one
-                if WAVEFORM_AVAILABLE and file_field == 'trackFile' and file_url and (not existing_track.jsonData or not existing_track.duration):
+                # Generate waveform for Main MP3 if track doesn't have one (unless skipped)
+                if not skip_waveform and WAVEFORM_AVAILABLE and file_field == 'trackFile' and file_url and (not existing_track.jsonData or not existing_track.duration):
                     try:
                         print(f"   📊 Generating waveform for existing track...")
                         waveform_data = generate_waveform_from_url(file_url)
@@ -623,6 +628,8 @@ class PrismaDatabaseService:
                             print(f"   ✅ Waveform added: {len(waveform_data['waveform'])} peaks, {waveform_data['duration']:.2f}s duration")
                     except Exception as e:
                         print(f"   ⚠️ Waveform generation failed: {e}")
+                elif skip_waveform:
+                    print(f"   ⏭️ Waveform generation skipped (fast mode)")
                 
                 # Only update empty fields
                 if not existing_track.title:
@@ -701,8 +708,8 @@ class PrismaDatabaseService:
                 if cover_image_data:
                     create_data.update(cover_image_data)
                 
-                # Generate waveform for Main MP3 tracks
-                if WAVEFORM_AVAILABLE and file_field == 'trackFile' and file_url:
+                # Generate waveform for Main MP3 tracks (unless skipped)
+                if not skip_waveform and WAVEFORM_AVAILABLE and file_field == 'trackFile' and file_url:
                     try:
                         print(f"   📊 Generating waveform...")
                         waveform_data = generate_waveform_from_url(file_url)
@@ -713,6 +720,8 @@ class PrismaDatabaseService:
                             print(f"   ✅ Waveform added: {len(waveform_data['waveform'])} peaks, {waveform_data['duration']:.2f}s duration")
                     except Exception as e:
                         print(f"   ⚠️ Waveform generation failed: {e}")
+                elif skip_waveform:
+                    print(f"   ⏭️ Waveform generation skipped (fast mode)")
                 
                 # Connect artist
                 if matched_artist:
@@ -761,10 +770,15 @@ def get_database_service() -> PrismaDatabaseService:
     return _db_service
 
 
-def save_track_to_database(track_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Save track data directly to database using Prisma."""
+def save_track_to_database(track_data: Dict[str, Any], skip_waveform: bool = False) -> Dict[str, Any]:
+    """Save track data directly to database using Prisma.
+    
+    Args:
+        track_data: Dictionary containing track metadata
+        skip_waveform: If True, skip waveform generation for faster uploads
+    """
     db = get_database_service()
-    return db.create_or_update_track(track_data)
+    return db.create_or_update_track(track_data, skip_waveform=skip_waveform)
 
 
 def check_database_connection() -> bool:

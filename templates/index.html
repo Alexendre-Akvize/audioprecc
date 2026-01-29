@@ -1641,8 +1641,18 @@
                                             <i data-lucide="upload-cloud"></i>
                                         </div>
                                         <div class="workflow-mode-text">
-                                            <div class="workflow-mode-title">Upload Only</div>
-                                            <div class="workflow-mode-desc">Direct upload to database (no processing)</div>
+                                            <div class="workflow-mode-title">Upload</div>
+                                            <div class="workflow-mode-desc">Upload + waveform generation</div>
+                                        </div>
+                                    </label>
+                                    <label class="workflow-mode-option" id="modeFast" onclick="setWorkflowMode('fast')">
+                                        <input type="radio" name="workflowMode" value="fast">
+                                        <div class="workflow-mode-icon">
+                                            <i data-lucide="zap"></i>
+                                        </div>
+                                        <div class="workflow-mode-text">
+                                            <div class="workflow-mode-title">Upload Fast</div>
+                                            <div class="workflow-mode-desc">No waveform (fastest)</div>
                                         </div>
                                     </label>
                                 </div>
@@ -1974,19 +1984,27 @@
             // Update UI
             const processOption = document.getElementById('modeProcess');
             const uploadOption = document.getElementById('modeUpload');
+            const fastOption = document.getElementById('modeFast');
             const trackTypeSelector = document.getElementById('trackTypeSelector');
             const submitBtn = document.getElementById('submitBtn');
             
+            // Reset all options
+            processOption.classList.remove('active');
+            uploadOption.classList.remove('active');
+            fastOption.classList.remove('active');
+            
             if (mode === 'process') {
                 processOption.classList.add('active');
-                uploadOption.classList.remove('active');
                 trackTypeSelector.classList.remove('visible');
                 submitBtn.innerHTML = '<i data-lucide="play"></i> Start Processing';
-            } else {
-                processOption.classList.remove('active');
+            } else if (mode === 'upload') {
                 uploadOption.classList.add('active');
                 trackTypeSelector.classList.add('visible');
                 submitBtn.innerHTML = '<i data-lucide="upload-cloud"></i> Upload to Database';
+            } else if (mode === 'fast') {
+                fastOption.classList.add('active');
+                trackTypeSelector.classList.add('visible');
+                submitBtn.innerHTML = '<i data-lucide="zap"></i> Upload Fast';
             }
             
             // Reinitialize icons
@@ -2280,26 +2298,31 @@
 
             // Route to appropriate upload handler based on workflow mode
             if (workflowMode === 'upload') {
-                await handleDirectUpload();
+                await handleDirectUpload(false);  // With waveform generation
+            } else if (workflowMode === 'fast') {
+                await handleDirectUpload(true);   // Skip waveform (fast mode)
             } else {
                 await handleProcessUpload();
             }
         });
 
         // Direct upload handler - uploads to S3 + database without processing
-        async function handleDirectUpload() {
+        // skipWaveform: if true, skip waveform generation for faster uploads
+        async function handleDirectUpload(skipWaveform = false) {
             isUploading = true;
             progressSection.classList.add('active');
             logPanel.classList.add('active');
             resultsSection.classList.add('active');
             submitBtn.disabled = true;
-            submitBtn.innerHTML = '<i data-lucide="loader-2" class="spin"></i> Uploading to Database...';
+            
+            const modeLabel = skipWaveform ? 'Fast Upload' : 'Upload';
+            submitBtn.innerHTML = `<i data-lucide="loader-2" class="spin"></i> ${modeLabel}...`;
             lucide.createIcons();
             
             if (!startTime) startTime = Date.now();
 
-            statusText.textContent = 'Uploading directly to database...';
-            progressLabel.textContent = 'Direct Upload';
+            statusText.textContent = skipWaveform ? 'Fast upload (no waveform)...' : 'Uploading to database...';
+            progressLabel.textContent = skipWaveform ? 'Fast Upload' : 'Direct Upload';
 
             const filesToUpload = [...selectedFiles];
             const totalFiles = filesToUpload.length;
@@ -2310,7 +2333,8 @@
             selectedFiles = [];
             updateFileList();
             
-            addLog(`📤 Starting direct upload of ${totalFiles} files (type: ${manualTrackType || 'auto-detect'})...`, 'info');
+            const modeInfo = skipWaveform ? 'FAST (no waveform)' : 'with waveform';
+            addLog(`📤 Starting ${modeInfo} upload of ${totalFiles} files (type: ${manualTrackType || 'auto-detect'})...`, 'info');
 
             let uploadedCount = 0;
             let failedCount = 0;
@@ -2332,6 +2356,10 @@
                     // Only send track_type if manually specified (empty = auto-detect)
                     if (manualTrackType) {
                         formData.append('track_type', manualTrackType);
+                    }
+                    // Skip waveform generation for fast mode
+                    if (skipWaveform) {
+                        formData.append('skip_waveform', 'true');
                     }
                     
                     const response = await fetch('/upload_direct', {
@@ -2366,15 +2394,20 @@
             progressFill.style.width = '100%';
             progressValue.textContent = '100%';
             progressLabel.textContent = 'Complete';
-            statusText.textContent = `Direct upload complete: ${uploadedCount} uploaded, ${failedCount} failed`;
+            const modeDesc = skipWaveform ? 'Fast upload' : 'Upload';
+            statusText.textContent = `${modeDesc} complete: ${uploadedCount} uploaded, ${failedCount} failed`;
             
-            // Re-enable upload
+            // Re-enable upload with appropriate button for current mode
             isUploading = false;
             submitBtn.disabled = false;
-            submitBtn.innerHTML = '<i data-lucide="upload-cloud"></i> Upload to Database';
+            if (skipWaveform) {
+                submitBtn.innerHTML = '<i data-lucide="zap"></i> Upload Fast';
+            } else {
+                submitBtn.innerHTML = '<i data-lucide="upload-cloud"></i> Upload to Database';
+            }
             lucide.createIcons();
             
-            let toastMsg = `${uploadedCount} files uploaded to database`;
+            let toastMsg = `${uploadedCount} files uploaded${skipWaveform ? ' (fast)' : ''}`;
             if (failedCount > 0) toastMsg += `, ${failedCount} failed`;
             showToast(toastMsg);
         }
