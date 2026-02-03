@@ -251,182 +251,6 @@
             justify-content: center;
         }
 
-        /* Workflow Mode Selector */
-        .workflow-mode-selector {
-            margin-bottom: 20px;
-            padding: 16px;
-            background: var(--bg-tertiary);
-            border-radius: var(--radius-sm);
-            border: 1px solid var(--border);
-        }
-
-        .workflow-mode-label {
-            font-size: 12px;
-            font-weight: 500;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin-bottom: 12px;
-            display: block;
-        }
-
-        .workflow-mode-options {
-            display: flex;
-            gap: 8px;
-        }
-
-        .workflow-mode-option {
-            flex: 1;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 14px 16px;
-            background: var(--bg-secondary);
-            border: 2px solid var(--border);
-            border-radius: var(--radius-sm);
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-
-        .workflow-mode-option:hover {
-            border-color: var(--border-hover);
-            background: var(--bg-card);
-        }
-
-        .workflow-mode-option.active {
-            border-color: var(--accent);
-            background: var(--accent-muted);
-        }
-
-        .workflow-mode-option input {
-            display: none;
-        }
-
-        .workflow-mode-icon {
-            width: 36px;
-            height: 36px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: var(--bg-tertiary);
-            border-radius: var(--radius-sm);
-            color: var(--text-muted);
-        }
-
-        .workflow-mode-option.active .workflow-mode-icon {
-            background: var(--accent);
-            color: var(--bg-primary);
-        }
-
-        .workflow-mode-text {
-            flex: 1;
-        }
-
-        .workflow-mode-title {
-            font-size: 14px;
-            font-weight: 500;
-            color: var(--text-primary);
-            margin-bottom: 2px;
-        }
-
-        .workflow-mode-desc {
-            font-size: 12px;
-            color: var(--text-muted);
-            line-height: 1.4;
-        }
-
-        .workflow-mode-option.active .workflow-mode-title {
-            color: var(--text-primary);
-        }
-
-        /* Track Type Selector (for Upload Only mode) */
-        .track-type-selector {
-            margin-top: 12px;
-            padding-top: 12px;
-            border-top: 1px solid var(--border);
-            display: none;
-        }
-
-        .track-type-selector.visible {
-            display: block;
-        }
-
-        .track-type-auto-info {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 12px 14px;
-            background: rgba(34, 197, 94, 0.1);
-            border: 1px solid rgba(34, 197, 94, 0.2);
-            border-radius: var(--radius-sm);
-            font-size: 13px;
-            color: var(--text-secondary);
-        }
-
-        .track-type-auto-info i {
-            width: 16px;
-            height: 16px;
-            color: var(--success);
-            flex-shrink: 0;
-        }
-
-        .track-type-auto-info strong {
-            color: var(--success);
-        }
-
-        .track-type-override {
-            margin-top: 10px;
-        }
-
-        .track-type-override summary {
-            font-size: 12px;
-            color: var(--text-muted);
-            cursor: pointer;
-            padding: 6px 0;
-        }
-
-        .track-type-override summary:hover {
-            color: var(--text-secondary);
-        }
-
-        .track-type-override[open] summary {
-            margin-bottom: 8px;
-        }
-
-        .track-type-selector label {
-            font-size: 12px;
-            font-weight: 500;
-            color: var(--text-muted);
-            margin-bottom: 8px;
-            display: block;
-        }
-
-        .track-type-select {
-            width: 100%;
-            padding: 10px 14px;
-            font-size: 13px;
-            font-family: inherit;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-radius: var(--radius-sm);
-            color: var(--text-primary);
-            cursor: pointer;
-            appearance: none;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
-            background-repeat: no-repeat;
-            background-position: right 12px center;
-            padding-right: 40px;
-        }
-
-        .track-type-select:hover {
-            border-color: var(--border-hover);
-        }
-
-        .track-type-select:focus {
-            outline: none;
-            border-color: var(--accent);
-        }
-
         /* Buttons */
         .btn {
             display: inline-flex;
@@ -1439,6 +1263,284 @@
             align-items: center;
         }
 
+        /* Dropbox Import Styles */
+        .dropbox-warning {
+            display: flex;
+            align-items: flex-start;
+            gap: 16px;
+            padding: 20px;
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            border-radius: var(--radius-sm);
+            color: var(--warning);
+        }
+
+        .dropbox-warning svg {
+            width: 24px;
+            height: 24px;
+            flex-shrink: 0;
+        }
+
+        .dropbox-warning a {
+            color: var(--accent);
+            text-decoration: underline;
+        }
+
+        .dropbox-input-section {
+            margin-bottom: 24px;
+        }
+
+        .dropbox-label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            color: var(--text-primary);
+        }
+
+        .dropbox-input-row {
+            display: flex;
+            gap: 8px;
+        }
+
+        .dropbox-input {
+            flex: 1;
+            padding: 12px 16px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            color: var(--text-primary);
+            font-size: 14px;
+            font-family: inherit;
+        }
+
+        .dropbox-input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .dropbox-input::placeholder {
+            color: var(--text-muted);
+        }
+
+        .dropbox-hint {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 8px;
+        }
+
+        .dropbox-file-list {
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            overflow: hidden;
+        }
+
+        .dropbox-file-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .dropbox-file-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .dropbox-files-container {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .dropbox-file-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 16px;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            transition: background 0.15s ease;
+        }
+
+        .dropbox-file-item:last-child {
+            border-bottom: none;
+        }
+
+        .dropbox-file-item:hover {
+            background: var(--bg-tertiary);
+        }
+
+        .dropbox-file-item.selected {
+            background: rgba(34, 197, 94, 0.1);
+        }
+
+        .dropbox-file-checkbox {
+            width: 18px;
+            height: 18px;
+            border: 2px solid var(--border);
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            transition: all 0.15s ease;
+        }
+
+        .dropbox-file-item.selected .dropbox-file-checkbox {
+            background: var(--success);
+            border-color: var(--success);
+        }
+
+        .dropbox-file-checkbox svg {
+            width: 12px;
+            height: 12px;
+            color: white;
+            opacity: 0;
+        }
+
+        .dropbox-file-item.selected .dropbox-file-checkbox svg {
+            opacity: 1;
+        }
+
+        .dropbox-file-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .dropbox-file-name {
+            font-size: 13px;
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .dropbox-file-path {
+            font-size: 11px;
+            color: var(--text-muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .dropbox-file-size {
+            font-size: 12px;
+            color: var(--text-muted);
+            flex-shrink: 0;
+        }
+
+        .dropbox-folder-item {
+            cursor: pointer;
+            background: var(--bg-tertiary);
+        }
+
+        .dropbox-folder-item:hover {
+            background: var(--bg-secondary);
+        }
+
+        .dropbox-folder-icon {
+            width: 18px;
+            height: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--warning);
+            flex-shrink: 0;
+        }
+
+        .dropbox-folder-icon svg {
+            width: 18px;
+            height: 18px;
+        }
+
+        .dropbox-namespace-options {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .dropbox-namespace-btn {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            transition: all 0.15s ease;
+            text-align: left;
+        }
+
+        .dropbox-namespace-btn:hover {
+            background: var(--bg-tertiary);
+            border-color: var(--border-hover);
+        }
+
+        .dropbox-namespace-btn.active {
+            background: rgba(34, 197, 94, 0.1);
+            border-color: var(--success);
+        }
+
+        .dropbox-namespace-btn svg {
+            width: 20px;
+            height: 20px;
+            color: var(--text-muted);
+        }
+
+        .dropbox-namespace-btn.active svg {
+            color: var(--success);
+        }
+
+        .dropbox-namespace-info {
+            flex: 1;
+        }
+
+        .dropbox-namespace-name {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .dropbox-namespace-desc {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .dropbox-progress {
+            margin-top: 24px;
+            padding: 16px;
+            background: var(--bg-primary);
+            border-radius: var(--radius-sm);
+        }
+
+        .dropbox-progress-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .dropbox-progress-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 12px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .btn-sm {
+            padding: 4px 12px;
+            font-size: 12px;
+        }
+
         .history-table {
             width: 100%;
             border-collapse: collapse;
@@ -1621,71 +1723,11 @@
                     </div>
                     <div class="card-body">
                         <form id="uploadForm">
-                            <!-- Workflow Mode Selector -->
-                            <div class="workflow-mode-selector">
-                                <span class="workflow-mode-label">Workflow Mode</span>
-                                <div class="workflow-mode-options">
-                                    <label class="workflow-mode-option active" id="modeProcess" onclick="setWorkflowMode('process')">
-                                        <input type="radio" name="workflowMode" value="process" checked>
-                                        <div class="workflow-mode-icon">
-                                            <i data-lucide="cpu"></i>
-                                        </div>
-                                        <div class="workflow-mode-text">
-                                            <div class="workflow-mode-title">Process Track</div>
-                                            <div class="workflow-mode-desc">Full AI separation + DJ edits</div>
-                                        </div>
-                                    </label>
-                                    <label class="workflow-mode-option" id="modeUpload" onclick="setWorkflowMode('upload')">
-                                        <input type="radio" name="workflowMode" value="upload">
-                                        <div class="workflow-mode-icon">
-                                            <i data-lucide="upload-cloud"></i>
-                                        </div>
-                                        <div class="workflow-mode-text">
-                                            <div class="workflow-mode-title">Upload</div>
-                                            <div class="workflow-mode-desc">Upload + waveform generation</div>
-                                        </div>
-                                    </label>
-                                    <label class="workflow-mode-option" id="modeFast" onclick="setWorkflowMode('fast')">
-                                        <input type="radio" name="workflowMode" value="fast">
-                                        <div class="workflow-mode-icon">
-                                            <i data-lucide="zap"></i>
-                                        </div>
-                                        <div class="workflow-mode-text">
-                                            <div class="workflow-mode-title">Upload Fast</div>
-                                            <div class="workflow-mode-desc">No waveform (fastest)</div>
-                                        </div>
-                                    </label>
-                                </div>
-                                <!-- Track Type Info (visible only in Upload Only mode) -->
-                                <div class="track-type-selector" id="trackTypeSelector">
-                                    <div class="track-type-auto-info">
-                                        <span>Track type is <strong>auto-detected</strong> from title (Instrumental, Extended, Acapella, etc.)</span>
-                                    </div>
-                                    <details class="track-type-override">
-                                        <summary>Override type manually</summary>
-                                        <label for="trackTypeSelect">Fallback Type (if not detected)</label>
-                                        <select id="trackTypeSelect" class="track-type-select">
-                                            <option value="">Auto-detect</option>
-                                            <option value="Main">Main</option>
-                                            <option value="Extended">Extended</option>
-                                            <option value="Instrumental">Instrumental</option>
-                                            <option value="Acapella">Acapella</option>
-                                            <option value="Original">Original</option>
-                                            <option value="Intro">Intro</option>
-                                            <option value="Short">Short</option>
-                                            <option value="Clap In">Clap In</option>
-                                            <option value="Acap In">Acap In</option>
-                                            <option value="Acap Out">Acap Out</option>
-                                        </select>
-                                    </details>
-                                </div>
-                            </div>
-
                             <div class="upload-zone" id="dropZone">
                                 <div class="upload-icon">
                                     <i data-lucide="music"></i>
                                 </div>
-                                <div class="upload-title">Drop MP3 files or folders here</div>
+                                <div class="upload-title">Drop MP3/WAV files or folders here</div>
                                 <div class="upload-subtitle">or click to browse</div>
                                 <div class="upload-actions">
                                     <button type="button" class="btn btn-secondary" onclick="document.getElementById('fileInput').click()">
@@ -1696,8 +1738,12 @@
                                         <i data-lucide="folder"></i>
                                         Select Folder
                                     </button>
+                                    <button type="button" class="btn btn-secondary" onclick="openDropboxModal()" id="dropboxBtn">
+                                        <i data-lucide="cloud-download"></i>
+                                        Import from Dropbox
+                                    </button>
                                 </div>
-                                <input type="file" id="fileInput" accept=".mp3" multiple>
+                                <input type="file" id="fileInput" accept=".mp3,.wav" multiple>
                                 <input type="file" id="folderInput" webkitdirectory directory multiple>
         </div>
 
@@ -1961,6 +2007,85 @@
         </div>
     </div>
 
+    <!-- Dropbox Import Modal -->
+    <div class="modal" id="dropboxModal">
+        <div class="modal-content" style="max-width: 700px;">
+            <div class="modal-header">
+                <h2 class="modal-title">
+                    <i data-lucide="cloud-download"></i>
+                    Import from Dropbox
+                </h2>
+                <button class="btn btn-ghost" onclick="closeDropboxModal()">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div id="dropboxNotConfigured" style="display: none;">
+                    <div class="dropbox-warning">
+                        <i data-lucide="alert-triangle"></i>
+                        <div>
+                            <strong>Dropbox not configured</strong>
+                            <p>Set DROPBOX_ACCESS_TOKEN in your .env file to enable Dropbox import.</p>
+                            <p style="margin-top: 8px; font-size: 12px; color: var(--text-muted);">
+                                Get your token at: <a href="https://www.dropbox.com/developers/apps" target="_blank">dropbox.com/developers/apps</a>
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                <div id="dropboxConfigured">
+                    <!-- Namespace selector for team accounts -->
+                    <div id="dropboxNamespaceSection" class="dropbox-input-section" style="display: none;">
+                        <label class="dropbox-label">Select Dropbox Location</label>
+                        <div class="dropbox-namespace-options" id="dropboxNamespaceOptions"></div>
+                    </div>
+                    
+                    <div class="dropbox-input-section">
+                        <label class="dropbox-label">Dropbox Folder Path</label>
+                        <div class="dropbox-input-row">
+                            <input type="text" id="dropboxFolderPath" class="dropbox-input" placeholder="/Music/Tracks or leave empty for root">
+                            <button class="btn btn-secondary" onclick="listDropboxFiles()" id="dropboxListBtn">
+                                <i data-lucide="search"></i>
+                                List Files
+                            </button>
+                        </div>
+                        <p class="dropbox-hint">Enter the path to a folder in your Dropbox (e.g., /Music/DJ Sets)</p>
+                    </div>
+                    
+                    <div id="dropboxFileList" class="dropbox-file-list" style="display: none;">
+                        <div class="dropbox-file-header">
+                            <span id="dropboxFileCount">0 audio files found</span>
+                            <div class="dropbox-file-actions">
+                                <button class="btn btn-ghost btn-sm" onclick="selectAllDropboxFiles()">Select All</button>
+                                <button class="btn btn-ghost btn-sm" onclick="deselectAllDropboxFiles()">Deselect All</button>
+                            </div>
+                        </div>
+                        <div id="dropboxFiles" class="dropbox-files-container"></div>
+                    </div>
+                    
+                    <div id="dropboxImportProgress" class="dropbox-progress" style="display: none;">
+                        <div class="dropbox-progress-header">
+                            <span id="dropboxProgressLabel">Importing...</span>
+                            <span id="dropboxProgressValue">0%</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="dropboxProgressFill"></div>
+                        </div>
+                        <div class="dropbox-progress-status" id="dropboxProgressStatus">
+                            <span id="dropboxStatusText">Starting download...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" onclick="closeDropboxModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="startDropboxImport()" id="dropboxImportBtn" disabled>
+                    <i data-lucide="download"></i>
+                    Import Selected Files
+                </button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Initialize Lucide icons
         lucide.createIcons();
@@ -1973,45 +2098,6 @@
         let startTime = null;
         let isUploading = false;
         let lastResultsCount = 0;
-        
-        // Workflow mode: 'process' (full AI processing) or 'upload' (direct upload only)
-        let workflowMode = 'process';
-        
-        // Set workflow mode
-        function setWorkflowMode(mode) {
-            workflowMode = mode;
-            
-            // Update UI
-            const processOption = document.getElementById('modeProcess');
-            const uploadOption = document.getElementById('modeUpload');
-            const fastOption = document.getElementById('modeFast');
-            const trackTypeSelector = document.getElementById('trackTypeSelector');
-            const submitBtn = document.getElementById('submitBtn');
-            
-            // Reset all options
-            processOption.classList.remove('active');
-            uploadOption.classList.remove('active');
-            fastOption.classList.remove('active');
-            
-            if (mode === 'process') {
-                processOption.classList.add('active');
-                trackTypeSelector.classList.remove('visible');
-                submitBtn.innerHTML = '<i data-lucide="play"></i> Start Processing';
-            } else if (mode === 'upload') {
-                uploadOption.classList.add('active');
-                trackTypeSelector.classList.add('visible');
-                submitBtn.innerHTML = '<i data-lucide="upload-cloud"></i> Upload to Database';
-            } else if (mode === 'fast') {
-                fastOption.classList.add('active');
-                trackTypeSelector.classList.add('visible');
-                submitBtn.innerHTML = '<i data-lucide="zap"></i> Upload Fast';
-            }
-            
-            // Reinitialize icons
-            lucide.createIcons();
-            
-            console.log('Workflow mode set to:', mode);
-        }
         
         // Full track tracking system
         // Status: 'selected' | 'uploading' | 'waiting' | 'processing' | 'ready_for_download' | 'completed'
@@ -2058,9 +2144,12 @@
         folderInput.addEventListener('change', (e) => handleNewFiles(Array.from(e.target.files)));
 
         function handleNewFiles(files) {
-            const mp3s = files.filter(f => f.name.toLowerCase().endsWith('.mp3'));
+            const audioFiles = files.filter(f => {
+                const name = f.name.toLowerCase();
+                return name.endsWith('.mp3') || name.endsWith('.wav');
+            });
             const newFiles = [];
-            mp3s.forEach(file => {
+            audioFiles.forEach(file => {
                 if (!selectedFiles.some(f => f.name === file.name && f.size === file.size)) {
                     selectedFiles.push(file);
                     newFiles.push(file);
@@ -2281,9 +2370,7 @@
             return results;
         }
 
-        // Form submit - supports two modes:
-        // 1. 'process' - Full AI processing with auto-enqueue (existing workflow)
-        // 2. 'upload' - Direct upload to S3 + database (no processing)
+        // Form submit - full AI processing workflow
         document.getElementById('uploadForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             if (selectedFiles.length === 0) {
@@ -2296,123 +2383,10 @@
                 return;
             }
 
-            // Route to appropriate upload handler based on workflow mode
-            if (workflowMode === 'upload') {
-                await handleDirectUpload(false);  // With waveform generation
-            } else if (workflowMode === 'fast') {
-                await handleDirectUpload(true);   // Skip waveform (fast mode)
-            } else {
-                await handleProcessUpload();
-            }
+            await handleProcessUpload();
         });
 
-        // Direct upload handler - uploads to S3 + database without processing
-        // skipWaveform: if true, skip waveform generation for faster uploads
-        async function handleDirectUpload(skipWaveform = false) {
-            isUploading = true;
-            progressSection.classList.add('active');
-            logPanel.classList.add('active');
-            resultsSection.classList.add('active');
-            submitBtn.disabled = true;
-            
-            const modeLabel = skipWaveform ? 'Fast Upload' : 'Upload';
-            submitBtn.innerHTML = `<i data-lucide="loader-2" class="spin"></i> ${modeLabel}...`;
-            lucide.createIcons();
-            
-            if (!startTime) startTime = Date.now();
-
-            statusText.textContent = skipWaveform ? 'Fast upload (no waveform)...' : 'Uploading to database...';
-            progressLabel.textContent = skipWaveform ? 'Fast Upload' : 'Direct Upload';
-
-            const filesToUpload = [...selectedFiles];
-            const totalFiles = filesToUpload.length;
-            // Get manual track type override (empty = auto-detect)
-            const manualTrackType = document.getElementById('trackTypeSelect').value;
-            
-            // Clear selection immediately
-            selectedFiles = [];
-            updateFileList();
-            
-            const modeInfo = skipWaveform ? 'FAST (no waveform)' : 'with waveform';
-            addLog(`📤 Starting ${modeInfo} upload of ${totalFiles} files (type: ${manualTrackType || 'auto-detect'})...`, 'info');
-
-            let uploadedCount = 0;
-            let failedCount = 0;
-            
-            // Upload files one by one for direct mode (more reliable)
-            for (let i = 0; i < totalFiles; i++) {
-                const file = filesToUpload[i];
-                const filename = file.name;
-                
-                // Update track status
-                allTracks[filename] = { status: 'uploading', progress: 0, worker: null };
-                updateFullTrackListUI();
-                
-                statusText.textContent = `Uploading ${i + 1}/${totalFiles}: ${filename}`;
-                
-                try {
-                    const formData = new FormData();
-                    formData.append('file', file);
-                    // Only send track_type if manually specified (empty = auto-detect)
-                    if (manualTrackType) {
-                        formData.append('track_type', manualTrackType);
-                    }
-                    // Skip waveform generation for fast mode
-                    if (skipWaveform) {
-                        formData.append('skip_waveform', 'true');
-                    }
-                    
-                    const response = await fetch('/upload_direct', {
-                        method: 'POST',
-                        body: formData
-                    });
-                    
-                    const result = await response.json();
-                    
-                    if (result.success) {
-                        uploadedCount++;
-                        allTracks[filename] = { status: 'completed', progress: 100, worker: null };
-                        addLog(`✅ Uploaded: ${result.title} → Database ID: ${result.database_id} [${result.action}]`, 'success');
-                    } else {
-                        failedCount++;
-                        allTracks[filename] = { status: 'failed', progress: 0, worker: null };
-                        addLog(`❌ Failed: ${filename} - ${result.error}`, 'error');
-                    }
-                } catch (error) {
-                    failedCount++;
-                    allTracks[filename] = { status: 'failed', progress: 0, worker: null };
-                    addLog(`❌ Error: ${filename} - ${error.message}`, 'error');
-                }
-                
-                // Update progress
-                const progress = Math.round((i + 1) / totalFiles * 100);
-                progressFill.style.width = progress + '%';
-                progressValue.textContent = progress + '%';
-                updateFullTrackListUI();
-            }
-
-            progressFill.style.width = '100%';
-            progressValue.textContent = '100%';
-            progressLabel.textContent = 'Complete';
-            const modeDesc = skipWaveform ? 'Fast upload' : 'Upload';
-            statusText.textContent = `${modeDesc} complete: ${uploadedCount} uploaded, ${failedCount} failed`;
-            
-            // Re-enable upload with appropriate button for current mode
-            isUploading = false;
-            submitBtn.disabled = false;
-            if (skipWaveform) {
-                submitBtn.innerHTML = '<i data-lucide="zap"></i> Upload Fast';
-            } else {
-                submitBtn.innerHTML = '<i data-lucide="upload-cloud"></i> Upload to Database';
-            }
-            lucide.createIcons();
-            
-            let toastMsg = `${uploadedCount} files uploaded${skipWaveform ? ' (fast)' : ''}`;
-            if (failedCount > 0) toastMsg += `, ${failedCount} failed`;
-            showToast(toastMsg);
-        }
-
-        // Process upload handler - full AI processing workflow (existing)
+        // Process upload handler - full AI processing workflow
         async function handleProcessUpload() {
             isUploading = true;
             progressSection.classList.add('active');
@@ -3740,6 +3714,472 @@
                 console.error('Error clearing history:', error);
                 showToast('Error clearing history');
             }
+        }
+
+        // ===== DROPBOX IMPORT FUNCTIONS =====
+        
+        let dropboxFiles = [];
+        let dropboxFolders = [];
+        let selectedDropboxFiles = new Set();
+        let currentDropboxImportId = null;
+        let dropboxPollingInterval = null;
+        let currentDropboxNamespace = '';
+        let dropboxSharedFolders = [];
+        
+        async function openDropboxModal() {
+            const modal = document.getElementById('dropboxModal');
+            modal.classList.add('show');
+            
+            // Check if Dropbox is configured
+            try {
+                const response = await fetch('/dropbox/configured');
+                const data = await response.json();
+                
+                if (data.configured) {
+                    document.getElementById('dropboxConfigured').style.display = 'block';
+                    document.getElementById('dropboxNotConfigured').style.display = 'none';
+                    
+                    // Load namespaces for team accounts
+                    await loadDropboxNamespaces();
+                } else {
+                    document.getElementById('dropboxConfigured').style.display = 'none';
+                    document.getElementById('dropboxNotConfigured').style.display = 'block';
+                }
+            } catch (error) {
+                console.error('Error checking Dropbox config:', error);
+            }
+            
+            lucide.createIcons();
+        }
+        
+        async function loadDropboxNamespaces() {
+            try {
+                const response = await fetch('/dropbox/namespaces');
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    console.error('Error loading namespaces:', data.error);
+                    return;
+                }
+                
+                const namespaceSection = document.getElementById('dropboxNamespaceSection');
+                const optionsContainer = document.getElementById('dropboxNamespaceOptions');
+                optionsContainer.innerHTML = '';
+                
+                const namespaces = data.namespaces || [];
+                dropboxSharedFolders = data.shared_folders || [];
+                
+                // Show namespace section if we have team namespaces or shared folders
+                if (namespaces.length > 1 || dropboxSharedFolders.length > 0) {
+                    namespaceSection.style.display = 'block';
+                    
+                    // Add namespace options
+                    namespaces.forEach(ns => {
+                        const btn = document.createElement('div');
+                        btn.className = 'dropbox-namespace-btn' + (ns.type === 'home' ? ' active' : '');
+                        btn.dataset.namespaceId = ns.id;
+                        btn.innerHTML = `
+                            <i data-lucide="${ns.type === 'home' ? 'user' : 'users'}"></i>
+                            <div class="dropbox-namespace-info">
+                                <div class="dropbox-namespace-name">${ns.name}</div>
+                                <div class="dropbox-namespace-desc">${ns.type === 'home' ? 'Your personal files' : 'Team shared content'}</div>
+                            </div>
+                        `;
+                        btn.addEventListener('click', () => selectDropboxNamespace(ns.id, btn));
+                        optionsContainer.appendChild(btn);
+                    });
+                    
+                    // Add shared/team folders section
+                    if (dropboxSharedFolders.length > 0) {
+                        const teamFolders = dropboxSharedFolders.filter(f => f.is_team_folder || f.is_inside_team_folder);
+                        if (teamFolders.length > 0) {
+                            const divider = document.createElement('div');
+                            divider.style.cssText = 'font-size: 12px; color: var(--text-muted); margin-top: 8px; padding: 8px 0; border-top: 1px solid var(--border);';
+                            divider.textContent = 'Team Folders (click to browse):';
+                            optionsContainer.appendChild(divider);
+                            
+                            teamFolders.forEach(folder => {
+                                const btn = document.createElement('div');
+                                btn.className = 'dropbox-namespace-btn';
+                                btn.innerHTML = `
+                                    <i data-lucide="folder"></i>
+                                    <div class="dropbox-namespace-info">
+                                        <div class="dropbox-namespace-name">${folder.name}</div>
+                                        <div class="dropbox-namespace-desc">Team folder</div>
+                                    </div>
+                                `;
+                                btn.addEventListener('click', () => {
+                                    document.getElementById('dropboxFolderPath').value = '/' + folder.name;
+                                    listDropboxFiles();
+                                });
+                                optionsContainer.appendChild(btn);
+                            });
+                        }
+                    }
+                    
+                    // Set default namespace
+                    if (namespaces.length > 0) {
+                        currentDropboxNamespace = namespaces[0].id;
+                    }
+                } else {
+                    namespaceSection.style.display = 'none';
+                }
+                
+                lucide.createIcons();
+                
+            } catch (error) {
+                console.error('Error loading namespaces:', error);
+            }
+        }
+        
+        function selectDropboxNamespace(namespaceId, btnElement) {
+            currentDropboxNamespace = namespaceId;
+            
+            // Update UI
+            document.querySelectorAll('.dropbox-namespace-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            btnElement.classList.add('active');
+            
+            // Clear current folder listing
+            document.getElementById('dropboxFileList').style.display = 'none';
+            document.getElementById('dropboxFolderPath').value = '';
+        }
+        
+        function closeDropboxModal() {
+            document.getElementById('dropboxModal').classList.remove('show');
+            
+            // Clear state
+            dropboxFiles = [];
+            dropboxFolders = [];
+            dropboxSharedFolders = [];
+            selectedDropboxFiles.clear();
+            currentDropboxNamespace = '';
+            document.getElementById('dropboxFileList').style.display = 'none';
+            document.getElementById('dropboxImportProgress').style.display = 'none';
+            document.getElementById('dropboxImportBtn').disabled = true;
+            document.getElementById('dropboxFolderPath').value = '';
+            document.getElementById('dropboxNamespaceSection').style.display = 'none';
+            
+            // Stop polling if running
+            if (dropboxPollingInterval) {
+                clearInterval(dropboxPollingInterval);
+                dropboxPollingInterval = null;
+            }
+        }
+        
+        // Close Dropbox modal on escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeDropboxModal();
+            }
+        });
+        
+        // Close modal on overlay click
+        document.getElementById('dropboxModal').addEventListener('click', (e) => {
+            if (e.target.id === 'dropboxModal') {
+                closeDropboxModal();
+            }
+        });
+        
+        async function listDropboxFiles() {
+            const folderPath = document.getElementById('dropboxFolderPath').value.trim();
+            const listBtn = document.getElementById('dropboxListBtn');
+            const fileListSection = document.getElementById('dropboxFileList');
+            
+            listBtn.disabled = true;
+            listBtn.innerHTML = '<i data-lucide="loader-2" class="spin"></i> Loading...';
+            lucide.createIcons();
+            
+            try {
+                const response = await fetch('/dropbox/list', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        folder_path: folderPath,
+                        namespace_id: currentDropboxNamespace 
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    showToast(data.error || 'Error listing files', 'error');
+                    return;
+                }
+                
+                dropboxFiles = data.files;
+                dropboxFolders = data.folders || [];
+                selectedDropboxFiles.clear();
+                
+                // Update counts
+                const folderCount = data.total_folders || 0;
+                const fileCount = data.total_files || 0;
+                let countText = '';
+                if (folderCount > 0) countText += `${folderCount} folders`;
+                if (folderCount > 0 && fileCount > 0) countText += ', ';
+                if (fileCount > 0) countText += `${fileCount} audio files`;
+                if (!countText) countText = 'Empty folder';
+                document.getElementById('dropboxFileCount').textContent = countText;
+                
+                // Render folders and files
+                const filesContainer = document.getElementById('dropboxFiles');
+                filesContainer.innerHTML = '';
+                
+                // Show current path with back button
+                if (folderPath) {
+                    const backItem = document.createElement('div');
+                    backItem.className = 'dropbox-file-item dropbox-folder-item';
+                    backItem.innerHTML = `
+                        <div class="dropbox-folder-icon">
+                            <i data-lucide="arrow-left"></i>
+                        </div>
+                        <div class="dropbox-file-info">
+                            <div class="dropbox-file-name">..</div>
+                            <div class="dropbox-file-path">Go back</div>
+                        </div>
+                    `;
+                    backItem.addEventListener('click', () => {
+                        const parentPath = folderPath.split('/').slice(0, -1).join('/');
+                        document.getElementById('dropboxFolderPath').value = parentPath;
+                        listDropboxFiles();
+                    });
+                    filesContainer.appendChild(backItem);
+                }
+                
+                // Render folders first
+                dropboxFolders.forEach((folder) => {
+                    const item = document.createElement('div');
+                    item.className = 'dropbox-file-item dropbox-folder-item';
+                    item.innerHTML = `
+                        <div class="dropbox-folder-icon">
+                            <i data-lucide="folder"></i>
+                        </div>
+                        <div class="dropbox-file-info">
+                            <div class="dropbox-file-name">${folder.name}</div>
+                            <div class="dropbox-file-path">${folder.path}</div>
+                        </div>
+                        <div class="dropbox-file-size">
+                            <i data-lucide="chevron-right"></i>
+                        </div>
+                    `;
+                    item.addEventListener('click', () => {
+                        document.getElementById('dropboxFolderPath').value = folder.path;
+                        listDropboxFiles();
+                    });
+                    filesContainer.appendChild(item);
+                });
+                
+                // Render files
+                if (dropboxFiles.length === 0 && dropboxFolders.length === 0) {
+                    filesContainer.innerHTML = '<div style="padding: 32px; text-align: center; color: var(--text-muted);">No audio files or folders found</div>';
+                } else {
+                    dropboxFiles.forEach((file, index) => {
+                        const item = document.createElement('div');
+                        item.className = 'dropbox-file-item';
+                        item.dataset.index = index;
+                        item.innerHTML = `
+                            <div class="dropbox-file-checkbox">
+                                <i data-lucide="check"></i>
+                            </div>
+                            <div class="dropbox-file-info">
+                                <div class="dropbox-file-name">${file.name}</div>
+                                <div class="dropbox-file-path">${file.path}</div>
+                            </div>
+                            <div class="dropbox-file-size">${file.size_mb} MB</div>
+                        `;
+                        item.addEventListener('click', () => toggleDropboxFile(index));
+                        filesContainer.appendChild(item);
+                    });
+                }
+                
+                fileListSection.style.display = 'block';
+                lucide.createIcons();
+                updateDropboxImportButton();
+                
+            } catch (error) {
+                console.error('Error listing Dropbox files:', error);
+                showToast('Error connecting to Dropbox', 'error');
+            } finally {
+                listBtn.disabled = false;
+                listBtn.innerHTML = '<i data-lucide="search"></i> List Files';
+                lucide.createIcons();
+            }
+        }
+        
+        function toggleDropboxFile(index) {
+            if (selectedDropboxFiles.has(index)) {
+                selectedDropboxFiles.delete(index);
+            } else {
+                selectedDropboxFiles.add(index);
+            }
+            
+            // Update UI
+            const items = document.querySelectorAll('.dropbox-file-item');
+            items.forEach((item, i) => {
+                if (selectedDropboxFiles.has(i)) {
+                    item.classList.add('selected');
+                } else {
+                    item.classList.remove('selected');
+                }
+            });
+            
+            updateDropboxImportButton();
+        }
+        
+        function selectAllDropboxFiles() {
+            dropboxFiles.forEach((_, index) => selectedDropboxFiles.add(index));
+            document.querySelectorAll('.dropbox-file-item').forEach(item => item.classList.add('selected'));
+            updateDropboxImportButton();
+        }
+        
+        function deselectAllDropboxFiles() {
+            selectedDropboxFiles.clear();
+            document.querySelectorAll('.dropbox-file-item').forEach(item => item.classList.remove('selected'));
+            updateDropboxImportButton();
+        }
+        
+        function updateDropboxImportButton() {
+            const importBtn = document.getElementById('dropboxImportBtn');
+            const count = selectedDropboxFiles.size;
+            importBtn.disabled = count === 0;
+            importBtn.innerHTML = `<i data-lucide="download"></i> Import ${count} File${count !== 1 ? 's' : ''}`;
+            lucide.createIcons();
+        }
+        
+        async function startDropboxImport() {
+            if (selectedDropboxFiles.size === 0) {
+                showToast('Please select files to import');
+                return;
+            }
+            
+            const folderPath = document.getElementById('dropboxFolderPath').value.trim();
+            const selectedPaths = Array.from(selectedDropboxFiles).map(index => dropboxFiles[index].path);
+            
+            const importBtn = document.getElementById('dropboxImportBtn');
+            importBtn.disabled = true;
+            importBtn.innerHTML = '<i data-lucide="loader-2" class="spin"></i> Starting...';
+            lucide.createIcons();
+            
+            // Show progress section
+            document.getElementById('dropboxImportProgress').style.display = 'block';
+            document.getElementById('dropboxProgressFill').style.width = '0%';
+            document.getElementById('dropboxProgressValue').textContent = '0%';
+            document.getElementById('dropboxStatusText').textContent = 'Starting download from Dropbox...';
+            
+            try {
+                const response = await fetch('/dropbox/import', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        folder_path: folderPath,
+                        files: selectedPaths
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    showToast(data.error || 'Error starting import', 'error');
+                    document.getElementById('dropboxImportProgress').style.display = 'none';
+                    importBtn.disabled = false;
+                    importBtn.innerHTML = `<i data-lucide="download"></i> Import ${selectedDropboxFiles.size} Files`;
+                    lucide.createIcons();
+                    return;
+                }
+                
+                currentDropboxImportId = data.import_id;
+                showToast(`Started importing ${data.total_files} files from Dropbox`);
+                
+                // Start polling for progress
+                startDropboxProgressPolling();
+                
+            } catch (error) {
+                console.error('Error starting Dropbox import:', error);
+                showToast('Error starting import', 'error');
+                document.getElementById('dropboxImportProgress').style.display = 'none';
+                importBtn.disabled = false;
+                importBtn.innerHTML = `<i data-lucide="download"></i> Import ${selectedDropboxFiles.size} Files`;
+                lucide.createIcons();
+            }
+        }
+        
+        function startDropboxProgressPolling() {
+            if (dropboxPollingInterval) {
+                clearInterval(dropboxPollingInterval);
+            }
+            
+            dropboxPollingInterval = setInterval(async () => {
+                if (!currentDropboxImportId) return;
+                
+                try {
+                    const response = await fetch(`/dropbox/status/${currentDropboxImportId}`);
+                    const status = await response.json();
+                    
+                    if (response.status === 404) {
+                        clearInterval(dropboxPollingInterval);
+                        dropboxPollingInterval = null;
+                        return;
+                    }
+                    
+                    // Update progress UI
+                    const total = status.total || 1;
+                    const downloaded = status.downloaded || 0;
+                    const queued = status.queued || 0;
+                    const failed = status.failed || 0;
+                    
+                    let progress = 0;
+                    let statusText = '';
+                    
+                    if (status.status === 'downloading') {
+                        progress = Math.round((downloaded / total) * 50);
+                        statusText = `Downloading: ${downloaded}/${total} files...`;
+                    } else if (status.status === 'queueing') {
+                        progress = 50 + Math.round((queued / total) * 25);
+                        statusText = `Queueing for processing: ${queued}/${total} files...`;
+                    } else if (status.status === 'processing') {
+                        progress = 75;
+                        statusText = `Processing: ${queued} files queued for analysis`;
+                    }
+                    
+                    document.getElementById('dropboxProgressFill').style.width = progress + '%';
+                    document.getElementById('dropboxProgressValue').textContent = progress + '%';
+                    document.getElementById('dropboxStatusText').textContent = statusText;
+                    
+                    // Check if complete
+                    if (status.status === 'processing') {
+                        // Import phase complete, files are now in processing queue
+                        document.getElementById('dropboxProgressFill').style.width = '100%';
+                        document.getElementById('dropboxProgressValue').textContent = '100%';
+                        document.getElementById('dropboxStatusText').textContent = 
+                            `Import complete! ${downloaded} files downloaded, ${queued} queued for processing` + 
+                            (failed > 0 ? `, ${failed} failed` : '');
+                        
+                        clearInterval(dropboxPollingInterval);
+                        dropboxPollingInterval = null;
+                        
+                        // Update import button
+                        const importBtn = document.getElementById('dropboxImportBtn');
+                        importBtn.innerHTML = '<i data-lucide="check"></i> Import Complete';
+                        importBtn.disabled = true;
+                        lucide.createIcons();
+                        
+                        // Start main polling to track processing
+                        if (!pollingInterval) startPolling();
+                        if (!statsInterval) startStatsPolling();
+                        
+                        showToast(`${queued} files from Dropbox queued for processing`);
+                        
+                        // Auto-close modal after delay
+                        setTimeout(() => {
+                            closeDropboxModal();
+                        }, 2000);
+                    }
+                    
+                } catch (error) {
+                    console.error('Error polling Dropbox status:', error);
+                }
+            }, 1000);
         }
     </script>
 </body>

@@ -75,6 +75,19 @@ MAX_PENDING_TRACKS = int(os.environ.get('MAX_PENDING_TRACKS', 1500))
 PENDING_WARNING_THRESHOLD = int(os.environ.get('PENDING_WARNING_THRESHOLD', 1000))
 
 # =============================================================================
+# DROPBOX INTEGRATION
+# =============================================================================
+# Set DROPBOX_ACCESS_TOKEN in your .env file
+# Get your token from: https://www.dropbox.com/developers/apps
+DROPBOX_ACCESS_TOKEN = os.environ.get('DROPBOX_ACCESS_TOKEN', '')
+DROPBOX_FOLDER = os.path.join(BASE_DIR, 'dropbox_downloads')
+os.makedirs(DROPBOX_FOLDER, exist_ok=True)
+
+# Dropbox import tracking
+dropbox_imports = {}  # { import_id: { status, total, downloaded, processed, files, errors } }
+dropbox_imports_lock = Lock()
+
+# =============================================================================
 # SEQUENTIAL PROCESSING MODE - Track individual file downloads
 # =============================================================================
 # Structure: { "Track Name": {"files": {"filename.mp3": False, "filename.wav": True, ...}, "all_downloaded": False} }
@@ -3919,6 +3932,558 @@ def upload_direct_batch():
         'error_count': error_count,
         'results': results
     })
+
+
+# =============================================================================
+# DROPBOX IMPORT - Fetch tracks from Dropbox folder
+# =============================================================================
+
+@app.route('/dropbox/list', methods=['POST'])
+def dropbox_list_files():
+    """
+    List all audio files (MP3/WAV) in a Dropbox folder.
+    Supports both personal folders and team shared folders.
+    
+    JSON body:
+    - folder_path: Dropbox folder path (e.g., "/Music/Tracks" or "" for root)
+    - namespace_id: Optional namespace ID for team folders
+    
+    Returns list of files with metadata.
+    """
+    # Reload .env in case token was added after startup
+    load_dotenv(override=True)
+    
+    # Re-read token from environment
+    dropbox_token = os.environ.get('DROPBOX_ACCESS_TOKEN', '') or DROPBOX_ACCESS_TOKEN
+    
+    print(f"📦 Dropbox list request - Token configured: {bool(dropbox_token)}, Token length: {len(dropbox_token) if dropbox_token else 0}")
+    
+    if not dropbox_token:
+        return jsonify({'error': 'Dropbox not configured. Set DROPBOX_ACCESS_TOKEN in .env'}), 400
+    
+    data = request.json or {}
+    folder_path = data.get('folder_path', '').strip()
+    namespace_id = data.get('namespace_id', '')
+    print(f"📦 Dropbox folder path: '{folder_path}', namespace: '{namespace_id}'")
+    
+    # Normalize path - Dropbox API expects empty string for root or path starting with /
+    if folder_path and not folder_path.startswith('/'):
+        folder_path = '/' + folder_path
+    if folder_path == '/':
+        folder_path = ''
+    
+    try:
+        # Call Dropbox API to list folder contents
+        headers = {
+            'Authorization': f'Bearer {dropbox_token}',
+            'Content-Type': 'application/json'
+        }
+        
+        # Add namespace header for team folders
+        if namespace_id:
+            headers['Dropbox-API-Path-Root'] = json.dumps({'.tag': 'namespace_id', 'namespace_id': namespace_id})
+        
+        all_files = []
+        has_more = True
+        cursor = None
+        
+        while has_more:
+            if cursor:
+                # Continue listing
+                response = requests.post(
+                    'https://api.dropboxapi.com/2/files/list_folder/continue',
+                    headers=headers,
+                    json={'cursor': cursor}
+                )
+            else:
+                # Initial listing - not recursive for browsing
+                response = requests.post(
+                    'https://api.dropboxapi.com/2/files/list_folder',
+                    headers=headers,
+                    json={
+                        'path': folder_path,
+                        'recursive': False,  # Browse one level at a time
+                        'include_media_info': False,
+                        'include_deleted': False
+                    }
+                )
+            
+            print(f"📦 Dropbox API response: status={response.status_code}, length={len(response.text) if response.text else 0}")
+            
+            if response.status_code != 200:
+                print(f"❌ Dropbox API error response: {response.text[:500] if response.text else 'empty'}")
+                try:
+                    error_data = response.json() if response.text else {}
+                    error_msg = error_data.get('error_summary', response.text or 'Unknown error')
+                except:
+                    error_msg = response.text or f'HTTP {response.status_code}'
+                return jsonify({'error': f'Dropbox API error: {error_msg}'}), response.status_code
+            
+            if not response.text:
+                print("❌ Dropbox returned empty response")
+                return jsonify({'error': 'Dropbox returned empty response - token may be expired'}), 500
+            
+            try:
+                result = response.json()
+            except Exception as json_err:
+                print(f"❌ Failed to parse Dropbox response: {response.text[:200]}")
+                return jsonify({'error': f'Invalid response from Dropbox: {str(json_err)}'}), 500
+            entries = result.get('entries', [])
+            
+            # Collect folders and audio files
+            all_folders = []
+            for entry in entries:
+                if entry.get('.tag') == 'folder':
+                    all_folders.append({
+                        'name': entry.get('name'),
+                        'path': entry.get('path_display'),
+                        'path_lower': entry.get('path_lower'),
+                        'type': 'folder'
+                    })
+                elif entry.get('.tag') == 'file':
+                    name = entry.get('name', '').lower()
+                    if name.endswith('.mp3') or name.endswith('.wav'):
+                        all_files.append({
+                            'name': entry.get('name'),
+                            'path': entry.get('path_display'),
+                            'path_lower': entry.get('path_lower'),
+                            'size': entry.get('size', 0),
+                            'size_mb': round(entry.get('size', 0) / (1024 * 1024), 2),
+                            'id': entry.get('id'),
+                            'type': 'file'
+                        })
+            
+            has_more = result.get('has_more', False)
+            cursor = result.get('cursor')
+        
+        # Sort folders and files
+        sorted_folders = sorted(all_folders, key=lambda x: x['name'].lower())
+        sorted_files = sorted(all_files, key=lambda x: x['name'].lower())
+        
+        print(f"📦 Found {len(sorted_folders)} folders, {len(sorted_files)} audio files")
+        
+        return jsonify({
+            'success': True,
+            'folder': folder_path or '/',
+            'total_folders': len(sorted_folders),
+            'total_files': len(sorted_files),
+            'folders': sorted_folders,
+            'files': sorted_files
+        })
+        
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Dropbox network error: {str(e)}")
+        return jsonify({'error': f'Network error: {str(e)}'}), 500
+    except Exception as e:
+        import traceback
+        print(f"❌ Dropbox list error: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({'error': f'Error listing Dropbox folder: {str(e)}'}), 500
+
+
+@app.route('/dropbox/import', methods=['POST'])
+def dropbox_import_files():
+    """
+    Import files from Dropbox and process them with the classic workflow.
+    Downloads files in background and enqueues them for processing.
+    
+    JSON body:
+    - folder_path: Dropbox folder path to import from
+    - files: Optional list of specific file paths to import (if empty, imports all)
+    
+    Returns import_id to track progress.
+    """
+    # Reload .env in case token was added after startup
+    load_dotenv(override=True)
+    
+    # Re-read token from environment
+    dropbox_token = os.environ.get('DROPBOX_ACCESS_TOKEN', '') or DROPBOX_ACCESS_TOKEN
+    
+    if not dropbox_token:
+        return jsonify({'error': 'Dropbox not configured. Set DROPBOX_ACCESS_TOKEN in .env'}), 400
+    
+    session_id = get_session_id()
+    data = request.json or {}
+    folder_path = data.get('folder_path', '').strip()
+    specific_files = data.get('files', [])  # Optional: specific files to import
+    
+    # Normalize path
+    if folder_path and not folder_path.startswith('/'):
+        folder_path = '/' + folder_path
+    if folder_path == '/':
+        folder_path = ''
+    
+    # Generate import ID
+    import_id = f"dropbox_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+    
+    # First, get the list of files to import
+    try:
+        headers = {
+            'Authorization': f'Bearer {dropbox_token}',
+            'Content-Type': 'application/json'
+        }
+        
+        files_to_import = []
+        
+        if specific_files:
+            # Use specific files provided
+            for file_path in specific_files:
+                name = os.path.basename(file_path)
+                if name.lower().endswith('.mp3') or name.lower().endswith('.wav'):
+                    files_to_import.append({
+                        'name': name,
+                        'path': file_path,
+                        'path_lower': file_path.lower()
+                    })
+        else:
+            # List all files in folder
+            has_more = True
+            cursor = None
+            
+            while has_more:
+                if cursor:
+                    response = requests.post(
+                        'https://api.dropboxapi.com/2/files/list_folder/continue',
+                        headers=headers,
+                        json={'cursor': cursor}
+                    )
+                else:
+                    response = requests.post(
+                        'https://api.dropboxapi.com/2/files/list_folder',
+                        headers=headers,
+                        json={
+                            'path': folder_path,
+                            'recursive': True,
+                            'include_media_info': False,
+                            'include_deleted': False
+                        }
+                    )
+                
+                if response.status_code != 200:
+                    error_data = response.json() if response.text else {}
+                    error_msg = error_data.get('error_summary', 'Unknown error')
+                    return jsonify({'error': f'Dropbox API error: {error_msg}'}), response.status_code
+                
+                result = response.json()
+                
+                for entry in result.get('entries', []):
+                    if entry.get('.tag') == 'file':
+                        name = entry.get('name', '').lower()
+                        if name.endswith('.mp3') or name.endswith('.wav'):
+                            files_to_import.append({
+                                'name': entry.get('name'),
+                                'path': entry.get('path_display'),
+                                'path_lower': entry.get('path_lower'),
+                                'size': entry.get('size', 0)
+                            })
+                
+                has_more = result.get('has_more', False)
+                cursor = result.get('cursor')
+        
+        if not files_to_import:
+            return jsonify({'error': 'No audio files found in the specified folder'}), 404
+        
+        # Initialize import tracking
+        with dropbox_imports_lock:
+            dropbox_imports[import_id] = {
+                'status': 'downloading',
+                'total': len(files_to_import),
+                'downloaded': 0,
+                'queued': 0,
+                'processed': 0,
+                'failed': 0,
+                'files': {f['name']: {'status': 'pending', 'path': f['path']} for f in files_to_import},
+                'errors': [],
+                'started_at': time.time(),
+                'session_id': session_id,
+                'folder_path': folder_path
+            }
+        
+        # Start background thread to download and process files
+        thread = threading.Thread(
+            target=dropbox_download_and_process_thread,
+            args=(import_id, files_to_import, session_id, dropbox_token)
+        )
+        thread.daemon = True
+        thread.start()
+        
+        return jsonify({
+            'success': True,
+            'import_id': import_id,
+            'total_files': len(files_to_import),
+            'message': f'Started importing {len(files_to_import)} files from Dropbox'
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'Error starting import: {str(e)}'}), 500
+
+
+def dropbox_download_and_process_thread(import_id, files_to_import, session_id, dropbox_token):
+    """
+    Background thread to download files from Dropbox and enqueue for processing.
+    """
+    headers = {
+        'Authorization': f'Bearer {dropbox_token}',
+    }
+    
+    # Create session-specific upload folder
+    session_upload_folder = os.path.join(UPLOAD_FOLDER, session_id)
+    os.makedirs(session_upload_folder, exist_ok=True)
+    
+    downloaded_files = []
+    
+    for file_info in files_to_import:
+        file_path = file_info['path']
+        file_name = file_info['name']
+        
+        try:
+            # Update status
+            with dropbox_imports_lock:
+                if import_id in dropbox_imports:
+                    dropbox_imports[import_id]['files'][file_name]['status'] = 'downloading'
+            
+            # Download file from Dropbox
+            download_response = requests.post(
+                'https://content.dropboxapi.com/2/files/download',
+                headers={
+                    'Authorization': f'Bearer {dropbox_token}',
+                    'Dropbox-API-Arg': json.dumps({'path': file_path})
+                },
+                stream=True
+            )
+            
+            if download_response.status_code != 200:
+                raise Exception(f'Download failed: {download_response.status_code}')
+            
+            # Save file locally
+            safe_filename = re.sub(r'[^\w\s\-\.]', '', file_name)
+            safe_filename = safe_filename.strip() or f'track_{len(downloaded_files)}.mp3'
+            local_path = os.path.join(session_upload_folder, safe_filename)
+            
+            with open(local_path, 'wb') as f:
+                for chunk in download_response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+            
+            downloaded_files.append({
+                'name': safe_filename,
+                'original_name': file_name,
+                'path': local_path
+            })
+            
+            # Update downloaded count
+            with dropbox_imports_lock:
+                if import_id in dropbox_imports:
+                    dropbox_imports[import_id]['downloaded'] += 1
+                    dropbox_imports[import_id]['files'][file_name]['status'] = 'downloaded'
+                    dropbox_imports[import_id]['files'][file_name]['local_path'] = local_path
+            
+            print(f"📥 Downloaded from Dropbox: {file_name}")
+            
+        except Exception as e:
+            print(f"❌ Failed to download {file_name}: {str(e)}")
+            with dropbox_imports_lock:
+                if import_id in dropbox_imports:
+                    dropbox_imports[import_id]['failed'] += 1
+                    dropbox_imports[import_id]['files'][file_name]['status'] = 'failed'
+                    dropbox_imports[import_id]['files'][file_name]['error'] = str(e)
+                    dropbox_imports[import_id]['errors'].append({
+                        'file': file_name,
+                        'error': str(e)
+                    })
+    
+    # Update status to queueing
+    with dropbox_imports_lock:
+        if import_id in dropbox_imports:
+            dropbox_imports[import_id]['status'] = 'queueing'
+    
+    # Now enqueue all downloaded files for processing
+    for file_info in downloaded_files:
+        try:
+            local_path = file_info['path']
+            filename = file_info['name']
+            
+            # Check if already processed
+            is_processed, _ = is_track_already_processed(filename)
+            if is_processed:
+                print(f"⏭️ Already processed: {filename}")
+                with dropbox_imports_lock:
+                    if import_id in dropbox_imports:
+                        dropbox_imports[import_id]['files'][file_info['original_name']]['status'] = 'skipped'
+                continue
+            
+            # Add to processing queue
+            track_queue.put({
+                'filepath': local_path,
+                'filename': filename,
+                'session_id': session_id,
+                'priority': 0
+            })
+            
+            with dropbox_imports_lock:
+                if import_id in dropbox_imports:
+                    dropbox_imports[import_id]['queued'] += 1
+                    dropbox_imports[import_id]['files'][file_info['original_name']]['status'] = 'queued'
+            
+            print(f"📋 Queued for processing: {filename}")
+            
+        except Exception as e:
+            print(f"❌ Failed to queue {file_info['name']}: {str(e)}")
+            with dropbox_imports_lock:
+                if import_id in dropbox_imports:
+                    dropbox_imports[import_id]['errors'].append({
+                        'file': file_info['name'],
+                        'error': f'Queue error: {str(e)}'
+                    })
+    
+    # Mark as complete
+    with dropbox_imports_lock:
+        if import_id in dropbox_imports:
+            dropbox_imports[import_id]['status'] = 'processing'
+            dropbox_imports[import_id]['completed_at'] = time.time()
+    
+    print(f"✅ Dropbox import {import_id} complete: {len(downloaded_files)} files queued for processing")
+
+
+@app.route('/dropbox/status/<import_id>')
+def dropbox_import_status(import_id):
+    """Get status of a Dropbox import operation."""
+    with dropbox_imports_lock:
+        if import_id not in dropbox_imports:
+            return jsonify({'error': 'Import not found'}), 404
+        
+        status = dropbox_imports[import_id].copy()
+    
+    return jsonify(status)
+
+
+@app.route('/dropbox/status')
+def dropbox_all_imports_status():
+    """Get status of all Dropbox imports for current session."""
+    session_id = get_session_id()
+    
+    with dropbox_imports_lock:
+        session_imports = {
+            k: v.copy() for k, v in dropbox_imports.items()
+            if v.get('session_id') == session_id
+        }
+    
+    # Re-read token to check if configured
+    dropbox_token = os.environ.get('DROPBOX_ACCESS_TOKEN', '') or DROPBOX_ACCESS_TOKEN
+    
+    return jsonify({
+        'imports': session_imports,
+        'dropbox_configured': bool(dropbox_token)
+    })
+
+
+@app.route('/dropbox/configured')
+def dropbox_configured():
+    """Check if Dropbox is configured."""
+    # Reload .env in case token was added after startup
+    load_dotenv(override=True)
+    
+    # Re-read token from environment
+    dropbox_token = os.environ.get('DROPBOX_ACCESS_TOKEN', '') or DROPBOX_ACCESS_TOKEN
+    
+    return jsonify({
+        'configured': bool(dropbox_token),
+        'message': 'Dropbox is configured' if dropbox_token else 'Set DROPBOX_ACCESS_TOKEN in .env'
+    })
+
+
+@app.route('/dropbox/namespaces')
+def dropbox_get_namespaces():
+    """
+    Get available namespaces for Dropbox team accounts.
+    This helps find team folders that require a specific namespace_id.
+    """
+    load_dotenv(override=True)
+    dropbox_token = os.environ.get('DROPBOX_ACCESS_TOKEN', '') or DROPBOX_ACCESS_TOKEN
+    
+    if not dropbox_token:
+        return jsonify({'error': 'Dropbox not configured'}), 400
+    
+    try:
+        # Get current account info to find namespace
+        headers = {
+            'Authorization': f'Bearer {dropbox_token}',
+            'Content-Type': 'application/json'
+        }
+        
+        # First get current account
+        account_response = requests.post(
+            'https://api.dropboxapi.com/2/users/get_current_account',
+            headers=headers
+        )
+        
+        namespaces = []
+        account_info = {}
+        
+        if account_response.status_code == 200:
+            account_data = account_response.json()
+            account_info = {
+                'name': account_data.get('name', {}).get('display_name', 'Unknown'),
+                'email': account_data.get('email', ''),
+                'account_type': account_data.get('account_type', {}).get('.tag', 'unknown')
+            }
+            
+            # Get root namespace info
+            root_info = account_data.get('root_info', {})
+            if root_info:
+                # Home namespace (personal files)
+                home_ns = root_info.get('home_namespace_id')
+                if home_ns:
+                    namespaces.append({
+                        'id': home_ns,
+                        'name': 'Home (Personal Files)',
+                        'type': 'home'
+                    })
+                
+                # Root namespace (might be team root)
+                root_ns = root_info.get('root_namespace_id')
+                if root_ns and root_ns != home_ns:
+                    namespaces.append({
+                        'id': root_ns,
+                        'name': 'Team Root',
+                        'type': 'team_root'
+                    })
+            
+            print(f"📦 Account: {account_info}")
+            print(f"📦 Namespaces found: {namespaces}")
+        
+        # Try to list shared folders (team folders appear here)
+        shared_response = requests.post(
+            'https://api.dropboxapi.com/2/sharing/list_folders',
+            headers=headers,
+            json={'limit': 100}
+        )
+        
+        shared_folders = []
+        if shared_response.status_code == 200:
+            shared_data = shared_response.json()
+            for entry in shared_data.get('entries', []):
+                shared_folders.append({
+                    'name': entry.get('name'),
+                    'shared_folder_id': entry.get('shared_folder_id'),
+                    'path_lower': entry.get('path_lower'),
+                    'is_team_folder': entry.get('is_team_folder', False),
+                    'is_inside_team_folder': entry.get('is_inside_team_folder', False)
+                })
+            print(f"📦 Shared folders: {len(shared_folders)}")
+        
+        return jsonify({
+            'success': True,
+            'account': account_info,
+            'namespaces': namespaces,
+            'shared_folders': shared_folders
+        })
+        
+    except Exception as e:
+        import traceback
+        print(f"❌ Error getting namespaces: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/status')
