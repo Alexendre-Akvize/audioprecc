@@ -2767,11 +2767,17 @@
 
         function startPolling() {
             if (pollingInterval) return; // Already polling
+            console.log('🔄 Starting main polling...');
             
             pollingInterval = setInterval(async () => {
                 try {
                     const res = await fetch('/status');
                     const status = await res.json();
+                    
+                    // Debug: log queue items count
+                    if (status.queue_items && status.queue_items.length > 0) {
+                        console.log(`📊 Queue items: ${status.queue_items.length}`, status.queue_items.slice(0, 3));
+                    }
 
                     numWorkers = status.num_workers || 16;
                     const activeWorkers = status.active_workers || 0;
@@ -4480,32 +4486,38 @@
         
         // Check for active bulk import on page load
         document.addEventListener('DOMContentLoaded', function() {
+            console.log('🚀 Page loaded, initializing...');
+            
+            // ALWAYS start main polling immediately to show tracks
+            startPolling();
+            startStatsPolling();
+            console.log('✅ Main polling started');
+            
             // Check bulk import status on load
             fetch('/dropbox/bulk_import/status')
                 .then(r => r.json())
                 .then(data => {
+                    console.log('📦 Bulk import status:', data);
                     if (data.active || (data.status && data.status !== 'idle' && data.status !== 'complete')) {
                         console.log('🔄 Active bulk import detected, resuming display...');
                         showBulkImportPanel();
                         startBulkImportPolling();
-                        
-                        // Also start main polling so tracks show in "All Tracks"
-                        if (!pollingInterval) {
-                            startPolling();
-                        }
-                        
-                        // Show notification
                         showToast('📦 Bulk import in progress - resuming display');
                     }
                 })
-                .catch(() => {});
+                .catch(e => console.error('Error checking bulk import:', e));
             
-            // Always start main polling after a short delay to show any processing tracks
-            setTimeout(() => {
-                if (!pollingInterval) {
-                    startPolling();
-                }
-            }, 1000);
+            // Also check main status for queue items
+            fetch('/status')
+                .then(r => r.json())
+                .then(data => {
+                    console.log('📊 Status check - queue_items:', data.queue_items?.length || 0);
+                    if (data.queue_items && data.queue_items.length > 0) {
+                        syncTracksFromQueueItems(data.queue_items, [], data.failed_files || []);
+                        updateCurrentProcessingCard(data.queue_items);
+                    }
+                })
+                .catch(e => console.error('Error checking status:', e));
         });
         
         function toggleDropboxFile(index) {

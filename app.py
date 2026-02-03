@@ -5153,16 +5153,17 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                                 print(f"❌ Failed (kept in Dropbox): {filename}")
         
         # =============================================================================
-        # MAIN PIPELINE LOOP
+        # MAIN PIPELINE LOOP - Download with buffer, process continuously
         # =============================================================================
         
         with bulk_import_lock:
-            bulk_import_state['current_status'] = 'processing'
+            bulk_import_state['current_status'] = 'downloading'
             bulk_import_state['last_update'] = time.time()
         
         file_index = 0
-        download_executor = ThreadPoolExecutor(max_workers=NUM_WORKERS * 2)  # 2x workers for downloads
-        active_downloads = []
+        download_threads = min(NUM_WORKERS, 10)  # Limit concurrent downloads
+        
+        print(f"🚀 Starting pipeline with {download_threads} download threads")
         
         try:
             while True:
@@ -5174,65 +5175,70 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                         print("⏹️ Bulk import stopped")
                         break
                 
-                # Get current queue size
+                # Get current queue size (waiting + processing)
                 current_queue_size = get_queue_size()
                 
-                # Update status
+                # Check completed tracks and delete from Dropbox
+                check_completed_tracks()
+                
+                # Update status display
                 with bulk_import_lock:
                     downloaded = bulk_import_state['downloaded']
                     processed = bulk_import_state['processed']
                     skipped = bulk_import_state['skipped']
                     failed = bulk_import_state['failed']
-                    total = len(all_files)
-                    bulk_import_state['current_file'] = f'⬇️ {downloaded} | ⏳ {current_queue_size} in queue | ✅ {processed} | ⏭️ {skipped}'
+                    bulk_import_state['current_file'] = f'⬇️ {downloaded} | ⏳ {current_queue_size} queue | ✅ {processed} done'
                     bulk_import_state['last_update'] = time.time()
                 
-                # Check completed tracks
-                check_completed_tracks()
-                
                 # Check if all done
+                total_handled = downloaded + skipped + failed
                 with completed_lock:
-                    total_done = len(completed_tracks) + skipped + failed
+                    total_complete = len(completed_tracks)
                 
-                if file_index >= len(all_files) and total_done >= len(all_files) - skipped:
-                    # All files downloaded and processed
-                    print(f"\n🎉 All {len(all_files)} files processed!")
+                if file_index >= len(all_files) and total_complete >= downloaded:
+                    print(f"\n🎉 All files processed!")
                     break
                 
-                # Download more if buffer is low
-                files_to_download = []
+                # DOWNLOAD LOGIC: Only download if buffer has room
                 if current_queue_size < BUFFER_SIZE and file_index < len(all_files):
-                    # Calculate how many to download
-                    slots_available = BUFFER_SIZE - current_queue_size
-                    batch_size = min(DOWNLOAD_BATCH, slots_available, len(all_files) - file_index)
+                    # Calculate how many we can download
+                    room_in_buffer = BUFFER_SIZE - current_queue_size
+                    files_remaining = len(all_files) - file_index
+                    batch_size = min(DOWNLOAD_BATCH, room_in_buffer, files_remaining)
                     
                     if batch_size > 0:
-                        files_to_download = all_files[file_index:file_index + batch_size]
+                        batch_files = all_files[file_index:file_index + batch_size]
                         file_index += batch_size
                         
-                        print(f"\n📥 Downloading batch of {len(files_to_download)} (queue: {current_queue_size}/{BUFFER_SIZE})")
+                        print(f"\n📥 Downloading {len(batch_files)} files (buffer: {current_queue_size}/{BUFFER_SIZE}, remaining: {files_remaining - batch_size})")
                         
                         with bulk_import_lock:
                             bulk_import_state['current_status'] = 'downloading'
+                        
+                        # Download this batch in parallel (but limited)
+                        with ThreadPoolExecutor(max_workers=download_threads) as batch_executor:
+                            futures = [batch_executor.submit(download_single_file, f) for f in batch_files]
+                            for future in as_completed(futures):
+                                result = future.result()
+                                if result.get('status') == 'stopped':
+                                    break
+                        
+                        with bulk_import_lock:
+                            bulk_import_state['current_status'] = 'processing'
+                        
+                        # After download, check queue again immediately
+                        continue
                 
-                # Submit downloads
-                if files_to_download:
-                    futures = [download_executor.submit(download_single_file, f) for f in files_to_download]
-                    
-                    # Wait for this batch to complete
-                    for future in as_completed(futures):
-                        result = future.result()
-                        if result['status'] == 'stopped':
-                            break
-                    
-                    with bulk_import_lock:
-                        bulk_import_state['current_status'] = 'processing'
+                # If buffer is full or no more files, just wait and monitor
+                if current_queue_size >= BUFFER_SIZE:
+                    print(f"⏸️  Buffer full ({current_queue_size}/{BUFFER_SIZE}), waiting for workers...")
                 
-                # Small sleep to prevent tight loop
-                time.sleep(2)
+                time.sleep(3)  # Wait before checking again
                 
-        finally:
-            download_executor.shutdown(wait=False)
+        except Exception as e:
+            print(f"❌ Pipeline error: {e}")
+            import traceback
+            traceback.print_exc()
         
         # Complete
         with bulk_import_lock:
@@ -5553,6 +5559,9 @@ def dropbox_download_and_process_thread(import_id, files_to_import, session_id, 
                     if import_id in dropbox_imports:
                         dropbox_imports[import_id]['files'][file_info['original_name']]['status'] = 'skipped'
                 continue
+            
+            # Add to queue tracker for UI display (IMPORTANT: must be before track_queue.put)
+            add_to_queue_tracker(filename, session_id)
             
             # Add to processing queue
             track_queue.put({
