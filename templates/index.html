@@ -4195,7 +4195,7 @@
         async function startBulkImport() {
             const folderPath = document.getElementById('dropboxFolderPath').value.trim();
             
-            if (!confirm(`🚀 BULK IMPORT\n\nThis will import ALL audio files from "${folderPath || 'your entire Dropbox'}":\n\n• Download files (like selecting files)\n• Process with all ${window.numWorkers || 'available'} workers\n• Show in "All Tracks" list\n• DELETE from Dropbox when each succeeds\n\n⚠️ Successfully processed files will be REMOVED from Dropbox!\nFailed files stay in Dropbox for retry.\n\nContinue?`)) {
+            if (!confirm(`🚀 BULK IMPORT\n\nThis will import audio files from "${folderPath || 'your entire Dropbox'}":\n\n• Auto-SKIP banned tracks (Remix, Bootleg, Mashup, etc.)\n• Clean titles (replace DJ names → ID By Rivoli)\n• Process with all workers\n• DELETE from Dropbox when done\n\n⚠️ Files will be REMOVED from Dropbox!\n(Skipped + Processed = Deleted)\n\nContinue?`)) {
                 return;
             }
             
