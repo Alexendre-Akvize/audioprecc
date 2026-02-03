@@ -4818,14 +4818,22 @@ def stop_bulk_import():
 
 def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_path):
     """
-    Background thread that downloads files from Dropbox and uses the CLASSIC workflow.
+    SMART PIPELINE: Downloads and processes in parallel with buffering.
     
-    Dropbox download = Just like "Select Files" in the UI
-    Then uses the exact same processing as normal uploads.
+    Strategy:
+    1. Download tracks in parallel (fill buffer up to BUFFER_SIZE)
+    2. Workers process continuously from queue
+    3. When buffer drops below BUFFER_SIZE, download more
+    4. Delete from Dropbox when processing succeeds
+    5. Loop until all files done
     
-    After each track completes successfully, delete from Dropbox.
+    This maximizes throughput by keeping workers always busy.
     """
     global bulk_import_state
+    
+    # Configuration
+    BUFFER_SIZE = 200  # Keep up to 200 tracks waiting to be processed
+    DOWNLOAD_BATCH = 50  # Download this many at a time
     
     try:
         # Setup headers
@@ -4946,53 +4954,61 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
             print("📦 No files to import")
             return
         
-        # PHASE 2: Download all files and queue them (like selecting files + clicking upload)
-        with bulk_import_lock:
-            bulk_import_state['current_status'] = 'downloading'
-            bulk_import_state['last_update'] = time.time()
+        # =============================================================================
+        # SMART PIPELINE: Download + Process with Buffer
+        # =============================================================================
         
         # Use the GLOBAL session for bulk import (so it shows in All Tracks)
         bulk_session_id = 'global'
         
-        # Map: safe_filename -> dropbox_path (for deletion after success)
-        dropbox_paths = {}
+        # Shared state for pipeline
+        dropbox_paths = {}  # safe_filename -> dropbox_path
         dropbox_paths_lock = Lock()
-        
-        # Download concurrency - match number of workers for speed
-        download_workers = NUM_WORKERS
-        print(f"🚀 Downloading {len(all_files)} files with {download_workers} parallel downloads")
+        completed_tracks = set()
+        completed_lock = Lock()
+        files_to_process = list(all_files)  # Queue of files still to download
+        files_lock = Lock()
+        download_index = [0]  # Track which file we're on
         
         from concurrent.futures import ThreadPoolExecutor, as_completed
         
-        # Track skipped files count
-        skipped_count = [0]  # Use list for mutability in nested function
+        print(f"\n{'='*60}")
+        print(f"🚀 SMART PIPELINE STARTED")
+        print(f"   Total files: {len(all_files)}")
+        print(f"   Buffer size: {BUFFER_SIZE} tracks")
+        print(f"   Download batch: {DOWNLOAD_BATCH} at a time")
+        print(f"   Workers: {NUM_WORKERS}")
+        print(f"{'='*60}\n")
         
-        def download_file(file_info, index):
-            """Download a single file from Dropbox to upload folder."""
+        def get_queue_size():
+            """Get number of tracks waiting/processing in queue."""
+            with queue_items_lock:
+                return sum(1 for info in queue_items.values() 
+                          if info.get('status') in ('waiting', 'processing'))
+        
+        def download_single_file(file_info):
+            """Download a single file from Dropbox."""
             dropbox_path = file_info['path']
             file_name = file_info['name']
+            
+            with files_lock:
+                current_index = download_index[0]
+                download_index[0] += 1
             
             # Check for stop
             with bulk_import_lock:
                 if bulk_import_state['stop_requested']:
                     return {'status': 'stopped', 'name': file_name}
             
-            # =====================================================
             # TITLE FILTERING - Skip tracks with banned keywords
-            # =====================================================
             title_result = process_track_title_for_import(file_name)
             
             if title_result['skip']:
-                print(f"⏭️  [{index+1}/{len(all_files)}] SKIPPING: {file_name}")
-                print(f"   Reason: {title_result['skip_reason']}")
+                print(f"⏭️  [{current_index+1}/{len(all_files)}] SKIP: {file_name} ({title_result['skip_reason']})")
                 
-                # Delete from Dropbox since it's a banned track
-                if delete_from_dropbox_if_skipped(dropbox_path, dropbox_token, dropbox_team_member_id, namespace_id):
-                    print(f"   🗑️  Deleted from Dropbox")
-                else:
-                    print(f"   ⚠️  Could not delete from Dropbox")
+                # Delete from Dropbox
+                delete_from_dropbox_if_skipped(dropbox_path, dropbox_token, dropbox_team_member_id, namespace_id)
                 
-                skipped_count[0] += 1
                 with bulk_import_lock:
                     bulk_import_state['skipped'] += 1
                     bulk_import_state['skipped_files'].append({
@@ -5001,35 +5017,29 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                     })
                     bulk_import_state['last_update'] = time.time()
                 
-                return {'status': 'skipped', 'name': file_name, 'reason': title_result['skip_reason']}
+                return {'status': 'skipped', 'name': file_name}
             
             try:
-                # Use cleaned title for the filename
+                # Prepare filename
                 cleaned_title = title_result['cleaned_title']
-                base_name = os.path.splitext(file_name)[0]
                 extension = os.path.splitext(file_name)[1]
-                
-                # Sanitize the cleaned filename
-                safe_filename = re.sub(r'[^\w\s\-\.]', '', cleaned_title).strip() or f'track_{index}'
+                safe_filename = re.sub(r'[^\w\s\-\.]', '', cleaned_title).strip() or f'track_{current_index}'
                 safe_filename = safe_filename + extension
                 local_path = os.path.join(UPLOAD_FOLDER, safe_filename)
                 
-                # Add to queue tracker IMMEDIATELY so it shows in "All Tracks"
+                # Add to queue tracker immediately
                 with queue_items_lock:
                     queue_items[safe_filename] = {
                         'status': 'waiting',
                         'worker': None,
                         'progress': 0,
                         'session_id': bulk_session_id,
-                        'step': '⬇️ Downloading from Dropbox...',
+                        'step': '⬇️ Downloading...',
                         'added_at': time.time(),
                         'processing_started_at': None
                     }
                 
-                print(f"⬇️  [{index+1}/{len(all_files)}] Downloading: {file_name}")
-                if cleaned_title != base_name:
-                    print(f"   → Cleaned: {cleaned_title}")
-                
+                # Download
                 download_headers = {
                     'Authorization': f'Bearer {dropbox_token}',
                     'Dropbox-API-Arg': json.dumps({'path': dropbox_path})
@@ -5039,224 +5049,190 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                 if namespace_id:
                     download_headers['Dropbox-API-Path-Root'] = json.dumps({'.tag': 'namespace_id', 'namespace_id': namespace_id})
                 
-                download_response = requests.post(
+                response = requests.post(
                     'https://content.dropboxapi.com/2/files/download',
                     headers=download_headers,
                     stream=True
                 )
                 
-                if download_response.status_code != 200:
-                    raise Exception(f'Download failed: HTTP {download_response.status_code}')
+                if response.status_code != 200:
+                    raise Exception(f'HTTP {response.status_code}')
                 
-                # Save file locally
                 with open(local_path, 'wb') as f:
-                    for chunk in download_response.iter_content(chunk_size=8192):
+                    for chunk in response.iter_content(chunk_size=8192):
                         if chunk:
                             f.write(chunk)
                 
+                # Store for Dropbox deletion
+                with dropbox_paths_lock:
+                    dropbox_paths[safe_filename] = dropbox_path
+                
+                # Update state
                 with bulk_import_lock:
                     bulk_import_state['downloaded'] += 1
                     bulk_import_state['last_update'] = time.time()
                 
-                # Update queue tracker - download complete, waiting for processing
+                # Queue for processing
                 with queue_items_lock:
                     if safe_filename in queue_items:
-                        queue_items[safe_filename]['step'] = '✅ Downloaded, waiting...'
+                        queue_items[safe_filename]['step'] = 'En attente...'
                 
-                # Store mapping for Dropbox deletion
-                with dropbox_paths_lock:
-                    dropbox_paths[safe_filename] = dropbox_path
+                track_queue.put({
+                    'filename': safe_filename,
+                    'session_id': bulk_session_id,
+                    'is_retry': False
+                })
                 
-                print(f"✅ Downloaded: {file_name} -> {safe_filename}")
-                return {'status': 'ok', 'name': file_name, 'safe_filename': safe_filename, 'local_path': local_path}
+                print(f"✅ [{current_index+1}/{len(all_files)}] {safe_filename}")
+                return {'status': 'ok', 'name': file_name, 'safe_filename': safe_filename}
                 
             except Exception as e:
-                print(f"❌ Download failed: {file_name} - {str(e)}")
-                
-                # Update queue tracker - failed
-                with queue_items_lock:
-                    if safe_filename in queue_items:
-                        queue_items[safe_filename]['status'] = 'failed'
-                        queue_items[safe_filename]['step'] = f'❌ Download failed: {str(e)[:50]}'
-                
+                print(f"❌ [{current_index+1}/{len(all_files)}] {file_name}: {str(e)[:50]}")
                 with bulk_import_lock:
                     bulk_import_state['failed'] += 1
-                    bulk_import_state['failed_files'].append({
-                        'name': file_name,
-                        'error': str(e)
-                    })
+                    bulk_import_state['failed_files'].append({'name': file_name, 'error': str(e)})
                     bulk_import_state['last_update'] = time.time()
                 return {'status': 'failed', 'name': file_name, 'error': str(e)}
         
-        # Download all files in parallel
-        downloaded_files = []
-        with ThreadPoolExecutor(max_workers=download_workers) as executor:
-            futures = {
-                executor.submit(download_file, file_info, i): file_info
-                for i, file_info in enumerate(all_files)
-            }
-            
-            for future in as_completed(futures):
-                result = future.result()
-                if result['status'] == 'stopped':
-                    print("⏹️ Bulk import stopped during downloads")
-                    with bulk_import_lock:
-                        bulk_import_state['current_status'] = 'stopped'
-                        bulk_import_state['active'] = False
-                    return
-                elif result['status'] == 'ok':
-                    downloaded_files.append(result)
-        
-        print(f"📦 Downloaded {len(downloaded_files)} files. Now queueing for processing...")
-        
-        # PHASE 3: Queue all files for processing (CLASSIC WORKFLOW)
-        with bulk_import_lock:
-            bulk_import_state['current_status'] = 'processing'
-            bulk_import_state['last_update'] = time.time()
-        
-        for file_result in downloaded_files:
-            safe_filename = file_result['safe_filename']
-            
-            # Update queue tracker status (already added during download)
-            with queue_items_lock:
-                if safe_filename in queue_items:
-                    queue_items[safe_filename]['step'] = 'En attente...'
-                else:
-                    # Add if not present (fallback)
-                    queue_items[safe_filename] = {
-                        'status': 'waiting',
-                        'worker': None,
-                        'progress': 0,
-                        'session_id': bulk_session_id,
-                        'step': 'En attente...',
-                        'added_at': time.time(),
-                        'processing_started_at': None
-                    }
-            
-            # Queue item for worker processing
-            track_queue.put({
-                'filename': safe_filename,
-                'session_id': bulk_session_id,
-                'is_retry': False
-            })
-            
-            print(f"📋 Queued: {safe_filename}")
-        
-        print(f"📦 All {len(downloaded_files)} files queued! Workers will process them.")
-        print(f"🚀 Using {NUM_WORKERS} workers for parallel processing")
-        
-        # PHASE 4: Monitor and delete from Dropbox when tracks complete
-        with bulk_import_lock:
-            bulk_import_state['current_file'] = f'Processing {len(downloaded_files)} tracks...'
-        
-        completed_tracks = set()
-        
-        while True:
-            # Check for stop
-            with bulk_import_lock:
-                if bulk_import_state['stop_requested']:
-                    bulk_import_state['current_status'] = 'stopped'
-                    bulk_import_state['active'] = False
-                    print("⏹️ Bulk import stopped")
-                    break
-            
-            time.sleep(3)  # Check every 3 seconds
-            
-            # Check queue items for completed tracks
-            with queue_items_lock:
-                for filename, info in list(queue_items.items()):
-                    if filename in dropbox_paths and filename not in completed_tracks:
-                        # Check if track is done (not in queue anymore or status is done/failed)
-                        if info.get('status') in ('done', 'failed') or filename not in queue_items:
-                            completed_tracks.add(filename)
-                            
-                            if info.get('status') == 'done' or info.get('status') not in ('waiting', 'processing', 'failed'):
-                                # SUCCESS - Delete from Dropbox
-                                dropbox_path = dropbox_paths[filename]
-                                with bulk_import_lock:
-                                    bulk_import_state['processed'] += 1
-                                    bulk_import_state['completed_files'].append(filename)
-                                    bulk_import_state['last_update'] = time.time()
-                                
-                                try:
-                                    print(f"🗑️  Deleting from Dropbox: {filename}")
-                                    delete_headers = {
-                                        'Authorization': f'Bearer {dropbox_token}',
-                                        'Content-Type': 'application/json'
-                                    }
-                                    if dropbox_team_member_id:
-                                        delete_headers['Dropbox-API-Select-User'] = dropbox_team_member_id
-                                    if namespace_id:
-                                        delete_headers['Dropbox-API-Path-Root'] = json.dumps({'.tag': 'namespace_id', 'namespace_id': namespace_id})
-                                    
-                                    delete_response = requests.post(
-                                        'https://api.dropboxapi.com/2/files/delete_v2',
-                                        headers=delete_headers,
-                                        json={'path': dropbox_path}
-                                    )
-                                    
-                                    if delete_response.status_code == 200:
-                                        print(f"✅ Deleted from Dropbox: {filename}")
-                                    else:
-                                        print(f"⚠️  Could not delete: {delete_response.text[:100]}")
-                                except Exception as e:
-                                    print(f"⚠️  Error deleting from Dropbox: {e}")
-                            
-                            elif info.get('status') == 'failed':
-                                # FAILED - Keep in Dropbox
-                                with bulk_import_lock:
-                                    if not any(f.get('name') == filename for f in bulk_import_state['failed_files']):
-                                        bulk_import_state['failed_files'].append({
-                                            'name': filename,
-                                            'error': info.get('step', 'Processing failed')
-                                        })
-                                    bulk_import_state['last_update'] = time.time()
-                                print(f"❌ Failed (kept in Dropbox): {filename}")
-            
-            # Also check for tracks no longer in queue (processed successfully)
+        def delete_from_dropbox_on_success(filename):
+            """Delete a file from Dropbox after successful processing."""
             with dropbox_paths_lock:
-                for filename, dropbox_path in list(dropbox_paths.items()):
-                    if filename not in completed_tracks:
-                        with queue_items_lock:
-                            if filename not in queue_items:
-                                # Track finished and was removed from queue = success
+                dropbox_path = dropbox_paths.get(filename)
+            
+            if not dropbox_path:
+                return
+            
+            try:
+                delete_headers = {
+                    'Authorization': f'Bearer {dropbox_token}',
+                    'Content-Type': 'application/json'
+                }
+                if dropbox_team_member_id:
+                    delete_headers['Dropbox-API-Select-User'] = dropbox_team_member_id
+                if namespace_id:
+                    delete_headers['Dropbox-API-Path-Root'] = json.dumps({'.tag': 'namespace_id', 'namespace_id': namespace_id})
+                
+                requests.post(
+                    'https://api.dropboxapi.com/2/files/delete_v2',
+                    headers=delete_headers,
+                    json={'path': dropbox_path}
+                )
+                print(f"🗑️  Deleted from Dropbox: {filename}")
+            except Exception as e:
+                print(f"⚠️  Could not delete from Dropbox: {e}")
+        
+        def check_completed_tracks():
+            """Check for completed tracks and delete from Dropbox."""
+            with dropbox_paths_lock:
+                filenames_to_check = list(dropbox_paths.keys())
+            
+            for filename in filenames_to_check:
+                with completed_lock:
+                    if filename in completed_tracks:
+                        continue
+                
+                with queue_items_lock:
+                    info = queue_items.get(filename, {})
+                    status = info.get('status', '')
+                    
+                    # Check if no longer in queue (processed and removed)
+                    if filename not in queue_items:
+                        with completed_lock:
+                            if filename not in completed_tracks:
                                 completed_tracks.add(filename)
                                 with bulk_import_lock:
                                     bulk_import_state['processed'] += 1
                                     bulk_import_state['completed_files'].append(filename)
                                     bulk_import_state['last_update'] = time.time()
-                                
-                                try:
-                                    print(f"🗑️  Deleting from Dropbox: {filename}")
-                                    delete_headers = {
-                                        'Authorization': f'Bearer {dropbox_token}',
-                                        'Content-Type': 'application/json'
-                                    }
-                                    if dropbox_team_member_id:
-                                        delete_headers['Dropbox-API-Select-User'] = dropbox_team_member_id
-                                    if namespace_id:
-                                        delete_headers['Dropbox-API-Path-Root'] = json.dumps({'.tag': 'namespace_id', 'namespace_id': namespace_id})
-                                    
-                                    delete_response = requests.post(
-                                        'https://api.dropboxapi.com/2/files/delete_v2',
-                                        headers=delete_headers,
-                                        json={'path': dropbox_path}
-                                    )
-                                    
-                                    if delete_response.status_code == 200:
-                                        print(f"✅ Deleted from Dropbox: {filename}")
-                                except Exception as e:
-                                    print(f"⚠️  Error deleting from Dropbox: {e}")
-            
-            # Update status display
-            with bulk_import_lock:
-                in_progress = len(downloaded_files) - len(completed_tracks)
-                bulk_import_state['current_file'] = f'⚙️ {in_progress} processing, ✅ {bulk_import_state["processed"]} done'
-            
-            # Check if all done
-            if len(completed_tracks) >= len(downloaded_files):
-                print(f"🎉 All {len(downloaded_files)} tracks processed!")
-                break
+                                delete_from_dropbox_on_success(filename)
+                    
+                    elif status == 'failed':
+                        with completed_lock:
+                            if filename not in completed_tracks:
+                                completed_tracks.add(filename)
+                                print(f"❌ Failed (kept in Dropbox): {filename}")
+        
+        # =============================================================================
+        # MAIN PIPELINE LOOP
+        # =============================================================================
+        
+        with bulk_import_lock:
+            bulk_import_state['current_status'] = 'processing'
+            bulk_import_state['last_update'] = time.time()
+        
+        file_index = 0
+        download_executor = ThreadPoolExecutor(max_workers=NUM_WORKERS * 2)  # 2x workers for downloads
+        active_downloads = []
+        
+        try:
+            while True:
+                # Check for stop
+                with bulk_import_lock:
+                    if bulk_import_state['stop_requested']:
+                        bulk_import_state['current_status'] = 'stopped'
+                        bulk_import_state['active'] = False
+                        print("⏹️ Bulk import stopped")
+                        break
+                
+                # Get current queue size
+                current_queue_size = get_queue_size()
+                
+                # Update status
+                with bulk_import_lock:
+                    downloaded = bulk_import_state['downloaded']
+                    processed = bulk_import_state['processed']
+                    skipped = bulk_import_state['skipped']
+                    failed = bulk_import_state['failed']
+                    total = len(all_files)
+                    bulk_import_state['current_file'] = f'⬇️ {downloaded} | ⏳ {current_queue_size} in queue | ✅ {processed} | ⏭️ {skipped}'
+                    bulk_import_state['last_update'] = time.time()
+                
+                # Check completed tracks
+                check_completed_tracks()
+                
+                # Check if all done
+                with completed_lock:
+                    total_done = len(completed_tracks) + skipped + failed
+                
+                if file_index >= len(all_files) and total_done >= len(all_files) - skipped:
+                    # All files downloaded and processed
+                    print(f"\n🎉 All {len(all_files)} files processed!")
+                    break
+                
+                # Download more if buffer is low
+                files_to_download = []
+                if current_queue_size < BUFFER_SIZE and file_index < len(all_files):
+                    # Calculate how many to download
+                    slots_available = BUFFER_SIZE - current_queue_size
+                    batch_size = min(DOWNLOAD_BATCH, slots_available, len(all_files) - file_index)
+                    
+                    if batch_size > 0:
+                        files_to_download = all_files[file_index:file_index + batch_size]
+                        file_index += batch_size
+                        
+                        print(f"\n📥 Downloading batch of {len(files_to_download)} (queue: {current_queue_size}/{BUFFER_SIZE})")
+                        
+                        with bulk_import_lock:
+                            bulk_import_state['current_status'] = 'downloading'
+                
+                # Submit downloads
+                if files_to_download:
+                    futures = [download_executor.submit(download_single_file, f) for f in files_to_download]
+                    
+                    # Wait for this batch to complete
+                    for future in as_completed(futures):
+                        result = future.result()
+                        if result['status'] == 'stopped':
+                            break
+                    
+                    with bulk_import_lock:
+                        bulk_import_state['current_status'] = 'processing'
+                
+                # Small sleep to prevent tight loop
+                time.sleep(2)
+                
+        finally:
+            download_executor.shutdown(wait=False)
         
         # Complete
         with bulk_import_lock:
@@ -5268,8 +5244,8 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
         print(f"\n{'='*60}")
         print(f"🎉 BULK IMPORT COMPLETE!")
         print(f"   Total found: {bulk_import_state['total_found']}")
-        print(f"   Skipped (banned keywords): {bulk_import_state['skipped']}")
-        print(f"   Downloaded: {len(downloaded_files)}")
+        print(f"   Skipped: {bulk_import_state['skipped']}")
+        print(f"   Downloaded: {bulk_import_state['downloaded']}")
         print(f"   Processed: {bulk_import_state['processed']}")
         print(f"   Failed: {bulk_import_state['failed']}")
         print(f"{'='*60}")

@@ -4376,13 +4376,14 @@
                 }
                 
                 // Update status text
+                const queueSize = data.queue_size || 0;
                 const statusLabels = {
                     'idle': 'No import running',
                     'starting': 'Starting...',
                     'scanning': '🔍 Scanning Dropbox...',
-                    'downloading': `⬇️ Downloading... (${data.downloaded || 0}/${data.total_found || 0})`,
-                    'separating': `🎵 Workers processing...`,
-                    'processing': `⚙️ Workers processing...`,
+                    'downloading': `⬇️ Downloading... (buffer: ${queueSize}/200)`,
+                    'separating': `🎵 Processing... (buffer: ${queueSize}/200)`,
+                    'processing': `⚙️ Processing... (buffer: ${queueSize}/200)`,
                     'stopping': '⏸️ Stopping...',
                     'stopped': '⏹️ Stopped',
                     'complete': `✅ Complete! ${data.processed || 0} processed`,
