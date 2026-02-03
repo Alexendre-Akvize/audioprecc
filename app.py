@@ -5014,6 +5014,18 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                 safe_filename = safe_filename + extension
                 local_path = os.path.join(UPLOAD_FOLDER, safe_filename)
                 
+                # Add to queue tracker IMMEDIATELY so it shows in "All Tracks"
+                with queue_items_lock:
+                    queue_items[safe_filename] = {
+                        'status': 'waiting',
+                        'worker': None,
+                        'progress': 0,
+                        'session_id': bulk_session_id,
+                        'step': '⬇️ Downloading from Dropbox...',
+                        'added_at': time.time(),
+                        'processing_started_at': None
+                    }
+                
                 print(f"⬇️  [{index+1}/{len(all_files)}] Downloading: {file_name}")
                 if cleaned_title != base_name:
                     print(f"   → Cleaned: {cleaned_title}")
@@ -5046,6 +5058,11 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                     bulk_import_state['downloaded'] += 1
                     bulk_import_state['last_update'] = time.time()
                 
+                # Update queue tracker - download complete, waiting for processing
+                with queue_items_lock:
+                    if safe_filename in queue_items:
+                        queue_items[safe_filename]['step'] = '✅ Downloaded, waiting...'
+                
                 # Store mapping for Dropbox deletion
                 with dropbox_paths_lock:
                     dropbox_paths[safe_filename] = dropbox_path
@@ -5055,6 +5072,13 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                 
             except Exception as e:
                 print(f"❌ Download failed: {file_name} - {str(e)}")
+                
+                # Update queue tracker - failed
+                with queue_items_lock:
+                    if safe_filename in queue_items:
+                        queue_items[safe_filename]['status'] = 'failed'
+                        queue_items[safe_filename]['step'] = f'❌ Download failed: {str(e)[:50]}'
+                
                 with bulk_import_lock:
                     bulk_import_state['failed'] += 1
                     bulk_import_state['failed_files'].append({
@@ -5093,10 +5117,23 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
         for file_result in downloaded_files:
             safe_filename = file_result['safe_filename']
             
-            # Add to queue tracker (same as upload endpoint)
-            add_to_queue_tracker(safe_filename, bulk_session_id)
+            # Update queue tracker status (already added during download)
+            with queue_items_lock:
+                if safe_filename in queue_items:
+                    queue_items[safe_filename]['step'] = 'En attente...'
+                else:
+                    # Add if not present (fallback)
+                    queue_items[safe_filename] = {
+                        'status': 'waiting',
+                        'worker': None,
+                        'progress': 0,
+                        'session_id': bulk_session_id,
+                        'step': 'En attente...',
+                        'added_at': time.time(),
+                        'processing_started_at': None
+                    }
             
-            # Queue item (same as upload endpoint)
+            # Queue item for worker processing
             track_queue.put({
                 'filename': safe_filename,
                 'session_id': bulk_session_id,
