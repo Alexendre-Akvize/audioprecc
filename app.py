@@ -5455,29 +5455,44 @@ def dropbox_import_files():
 def dropbox_download_and_process_thread(import_id, files_to_import, session_id, dropbox_token, dropbox_team_member_id='', root_namespace_id=''):
     """
     Background thread to download files from Dropbox and enqueue for processing.
+    Uses SMART PIPELINE: downloads only what workers can handle, then more as they finish.
     """
-    headers = {
-        'Authorization': f'Bearer {dropbox_token}',
-    }
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     
-    # Add team member header for Dropbox Business team tokens
-    if dropbox_team_member_id:
-        headers['Dropbox-API-Select-User'] = dropbox_team_member_id
-    
-    print(f"📦 Download thread started with namespace: {root_namespace_id}")
+    print(f"📦 Smart pipeline started with namespace: {root_namespace_id}")
+    print(f"   Total files: {len(files_to_import)}")
+    print(f"   Workers: {NUM_WORKERS}")
     
     # Create session-specific upload folder
     session_upload_folder = os.path.join(UPLOAD_FOLDER, session_id)
     os.makedirs(session_upload_folder, exist_ok=True)
     
-    downloaded_files = []
+    # Pipeline settings - download what workers can handle + small buffer
+    BUFFER_SIZE = NUM_WORKERS * 2  # Keep 2x workers worth of tracks ready
+    DOWNLOAD_BATCH = NUM_WORKERS   # Download in batches of NUM_WORKERS
     
-    for file_info in files_to_import:
+    # Track state
+    file_index = 0
+    downloaded_count = 0
+    queued_count = 0
+    failed_count = 0
+    
+    def get_current_queue_size():
+        """Get number of tracks waiting/processing for this session."""
+        with queue_items_lock:
+            return sum(1 for info in queue_items.values() 
+                      if info.get('session_id') == session_id and 
+                         info.get('status') in ('waiting', 'processing'))
+    
+    def download_and_queue_single(file_info):
+        """Download one file and immediately queue it."""
+        nonlocal downloaded_count, queued_count, failed_count
+        
         file_path = file_info['path']
         file_name = file_info['name']
         
         try:
-            # Update status
+            # Update status to downloading
             with dropbox_imports_lock:
                 if import_id in dropbox_imports:
                     dropbox_imports[import_id]['files'][file_name]['status'] = 'downloading'
@@ -5489,8 +5504,6 @@ def dropbox_download_and_process_thread(import_id, files_to_import, session_id, 
             }
             if dropbox_team_member_id:
                 download_headers['Dropbox-API-Select-User'] = dropbox_team_member_id
-            
-            # Add namespace header if available (passed from the import thread)
             if root_namespace_id:
                 download_headers['Dropbox-API-Path-Root'] = json.dumps({'.tag': 'namespace_id', 'namespace_id': root_namespace_id})
             
@@ -5505,7 +5518,7 @@ def dropbox_download_and_process_thread(import_id, files_to_import, session_id, 
             
             # Save file locally
             safe_filename = re.sub(r'[^\w\s\-\.]', '', file_name)
-            safe_filename = safe_filename.strip() or f'track_{len(downloaded_files)}.mp3'
+            safe_filename = safe_filename.strip() or f'track_{downloaded_count}.mp3'
             local_path = os.path.join(session_upload_folder, safe_filename)
             
             with open(local_path, 'wb') as f:
@@ -5513,23 +5526,50 @@ def dropbox_download_and_process_thread(import_id, files_to_import, session_id, 
                     if chunk:
                         f.write(chunk)
             
-            downloaded_files.append({
-                'name': safe_filename,
-                'original_name': file_name,
-                'path': local_path
-            })
+            downloaded_count += 1
             
-            # Update downloaded count
+            # Update downloaded status
             with dropbox_imports_lock:
                 if import_id in dropbox_imports:
                     dropbox_imports[import_id]['downloaded'] += 1
                     dropbox_imports[import_id]['files'][file_name]['status'] = 'downloaded'
                     dropbox_imports[import_id]['files'][file_name]['local_path'] = local_path
             
-            print(f"📥 Downloaded from Dropbox: {file_name}")
+            print(f"📥 [{downloaded_count}/{len(files_to_import)}] Downloaded: {file_name}")
+            
+            # Check if already processed
+            is_processed, _ = is_track_already_processed(safe_filename)
+            if is_processed:
+                print(f"⏭️ Already processed: {safe_filename}")
+                with dropbox_imports_lock:
+                    if import_id in dropbox_imports:
+                        dropbox_imports[import_id]['files'][file_name]['status'] = 'skipped'
+                return {'status': 'skipped', 'name': file_name}
+            
+            # Add to queue tracker for UI display
+            add_to_queue_tracker(safe_filename, session_id)
+            
+            # Queue for processing
+            track_queue.put({
+                'filepath': local_path,
+                'filename': safe_filename,
+                'session_id': session_id,
+                'priority': 0
+            })
+            
+            queued_count += 1
+            
+            with dropbox_imports_lock:
+                if import_id in dropbox_imports:
+                    dropbox_imports[import_id]['queued'] += 1
+                    dropbox_imports[import_id]['files'][file_name]['status'] = 'queued'
+            
+            print(f"📋 [{queued_count}/{len(files_to_import)}] Queued: {safe_filename}")
+            return {'status': 'ok', 'name': file_name}
             
         except Exception as e:
-            print(f"❌ Failed to download {file_name}: {str(e)}")
+            failed_count += 1
+            print(f"❌ Failed: {file_name}: {str(e)[:50]}")
             with dropbox_imports_lock:
                 if import_id in dropbox_imports:
                     dropbox_imports[import_id]['failed'] += 1
@@ -5539,61 +5579,79 @@ def dropbox_download_and_process_thread(import_id, files_to_import, session_id, 
                         'file': file_name,
                         'error': str(e)
                     })
+            return {'status': 'failed', 'name': file_name, 'error': str(e)}
     
-    # Update status to queueing
-    with dropbox_imports_lock:
-        if import_id in dropbox_imports:
-            dropbox_imports[import_id]['status'] = 'queueing'
+    # =============================================================================
+    # SMART PIPELINE LOOP
+    # =============================================================================
     
-    # Now enqueue all downloaded files for processing
-    for file_info in downloaded_files:
-        try:
-            local_path = file_info['path']
-            filename = file_info['name']
+    try:
+        while file_index < len(files_to_import):
+            # Get current queue size
+            current_queue_size = get_current_queue_size()
             
-            # Check if already processed
-            is_processed, _ = is_track_already_processed(filename)
-            if is_processed:
-                print(f"⏭️ Already processed: {filename}")
-                with dropbox_imports_lock:
-                    if import_id in dropbox_imports:
-                        dropbox_imports[import_id]['files'][file_info['original_name']]['status'] = 'skipped'
-                continue
+            # Only download more if buffer has room
+            if current_queue_size < BUFFER_SIZE:
+                # Calculate how many we can download
+                room_in_buffer = BUFFER_SIZE - current_queue_size
+                files_remaining = len(files_to_import) - file_index
+                batch_size = min(DOWNLOAD_BATCH, room_in_buffer, files_remaining)
+                
+                if batch_size > 0:
+                    batch_files = files_to_import[file_index:file_index + batch_size]
+                    file_index += batch_size
+                    
+                    print(f"\n📥 Downloading batch of {len(batch_files)} files (buffer: {current_queue_size}/{BUFFER_SIZE})")
+                    
+                    # Update status
+                    with dropbox_imports_lock:
+                        if import_id in dropbox_imports:
+                            dropbox_imports[import_id]['status'] = 'downloading'
+                    
+                    # Download batch in parallel (limited threads)
+                    download_threads = min(NUM_WORKERS, 8)
+                    with ThreadPoolExecutor(max_workers=download_threads) as executor:
+                        futures = [executor.submit(download_and_queue_single, f) for f in batch_files]
+                        for future in as_completed(futures):
+                            try:
+                                future.result()
+                            except Exception as e:
+                                print(f"⚠️ Thread error: {e}")
+                    
+                    # Update status to processing
+                    with dropbox_imports_lock:
+                        if import_id in dropbox_imports:
+                            dropbox_imports[import_id]['status'] = 'processing'
+                    
+                    # Continue to check if we can download more
+                    continue
             
-            # Add to queue tracker for UI display (IMPORTANT: must be before track_queue.put)
-            add_to_queue_tracker(filename, session_id)
-            
-            # Add to processing queue
-            track_queue.put({
-                'filepath': local_path,
-                'filename': filename,
-                'session_id': session_id,
-                'priority': 0
-            })
-            
-            with dropbox_imports_lock:
-                if import_id in dropbox_imports:
-                    dropbox_imports[import_id]['queued'] += 1
-                    dropbox_imports[import_id]['files'][file_info['original_name']]['status'] = 'queued'
-            
-            print(f"📋 Queued for processing: {filename}")
-            
-        except Exception as e:
-            print(f"❌ Failed to queue {file_info['name']}: {str(e)}")
-            with dropbox_imports_lock:
-                if import_id in dropbox_imports:
-                    dropbox_imports[import_id]['errors'].append({
-                        'file': file_info['name'],
-                        'error': f'Queue error: {str(e)}'
-                    })
-    
-    # Mark as complete
-    with dropbox_imports_lock:
-        if import_id in dropbox_imports:
-            dropbox_imports[import_id]['status'] = 'processing'
-            dropbox_imports[import_id]['completed_at'] = time.time()
-    
-    print(f"✅ Dropbox import {import_id} complete: {len(downloaded_files)} files queued for processing")
+            # Buffer is full, wait for workers to process some
+            print(f"⏸️ Buffer full ({current_queue_size}/{BUFFER_SIZE}), waiting for workers...")
+            time.sleep(2)
+        
+        # All files downloaded, mark as complete
+        with dropbox_imports_lock:
+            if import_id in dropbox_imports:
+                dropbox_imports[import_id]['status'] = 'processing'
+                dropbox_imports[import_id]['completed_at'] = time.time()
+        
+        print(f"\n✅ Dropbox import {import_id} complete!")
+        print(f"   Downloaded: {downloaded_count}")
+        print(f"   Queued: {queued_count}")
+        print(f"   Failed: {failed_count}")
+        
+    except Exception as e:
+        print(f"❌ Pipeline error: {e}")
+        import traceback
+        traceback.print_exc()
+        with dropbox_imports_lock:
+            if import_id in dropbox_imports:
+                dropbox_imports[import_id]['status'] = 'error'
+                dropbox_imports[import_id]['errors'].append({
+                    'file': 'pipeline',
+                    'error': str(e)
+                })
 
 
 @app.route('/dropbox/status/<import_id>')
