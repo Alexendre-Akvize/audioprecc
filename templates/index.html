@@ -1352,8 +1352,9 @@
         }
 
         .dropbox-files-container {
-            max-height: 300px;
+            max-height: 400px;
             overflow-y: auto;
+            scroll-behavior: smooth;
         }
 
         .dropbox-file-item {
@@ -2045,10 +2046,36 @@
                             <input type="text" id="dropboxFolderPath" class="dropbox-input" placeholder="/Music/Tracks or leave empty for root">
                             <button class="btn btn-secondary" onclick="listDropboxFiles()" id="dropboxListBtn">
                                 <i data-lucide="search"></i>
-                                List Files
+                                Browse
+                            </button>
+                            <button class="btn btn-secondary" onclick="scanAllDropboxFiles()" id="dropboxScanBtn">
+                                <i data-lucide="scan"></i>
+                                Scan
+                            </button>
+                            <button class="btn btn-primary" onclick="startBulkImport()" id="dropboxBulkBtn">
+                                <i data-lucide="download-cloud"></i>
+                                Import All
                             </button>
                         </div>
-                        <p class="dropbox-hint">Enter the path to a folder in your Dropbox (e.g., /Music/DJ Sets)</p>
+                        <p class="dropbox-hint">Scan to preview files, or Import All to download and process entire folder</p>
+                    </div>
+                    
+                    <!-- Bulk Import Status Panel -->
+                    <div id="bulkImportPanel" class="dropbox-progress" style="display: none;">
+                        <div class="dropbox-progress-header">
+                            <span id="bulkImportStatus">Idle</span>
+                            <button class="btn btn-ghost btn-sm" onclick="stopBulkImport()" id="bulkStopBtn" style="display: none;">
+                                <i data-lucide="square"></i> Stop
+                            </button>
+                        </div>
+                        <div class="progress-bar" style="margin: 12px 0;">
+                            <div class="progress-fill" id="bulkProgressBar" style="width: 0%"></div>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted);">
+                            <span id="bulkProgressText">0 / 0 files</span>
+                            <span id="bulkCurrentFile"></span>
+                        </div>
+                        <div id="bulkStats" style="margin-top: 8px; font-size: 12px; color: var(--text-muted);"></div>
                     </div>
                     
                     <div id="dropboxFileList" class="dropbox-file-list" style="display: none;">
@@ -3769,14 +3796,30 @@
                 const namespaces = data.namespaces || [];
                 dropboxSharedFolders = data.shared_folders || [];
                 
+                // IMPORTANT: For team accounts, always set the root namespace to access team folder contents
+                // Find the team_root namespace first, fallback to any available namespace
+                const teamRootNs = namespaces.find(ns => ns.type === 'team_root');
+                const homeNs = namespaces.find(ns => ns.type === 'home');
+                
+                // Default to team_root for team accounts (needed to see subfolder contents)
+                if (teamRootNs) {
+                    currentDropboxNamespace = teamRootNs.id;
+                    console.log('📦 Using team root namespace:', teamRootNs.id);
+                } else if (namespaces.length > 0) {
+                    currentDropboxNamespace = namespaces[0].id;
+                    console.log('📦 Using default namespace:', namespaces[0].id);
+                }
+                
                 // Show namespace section if we have team namespaces or shared folders
                 if (namespaces.length > 1 || dropboxSharedFolders.length > 0) {
                     namespaceSection.style.display = 'block';
                     
-                    // Add namespace options
+                    // Add namespace options - default to team_root for team folders
                     namespaces.forEach(ns => {
                         const btn = document.createElement('div');
-                        btn.className = 'dropbox-namespace-btn' + (ns.type === 'home' ? ' active' : '');
+                        // For team accounts, default to team_root namespace
+                        const isActive = teamRootNs ? (ns.type === 'team_root') : (ns.type === 'home');
+                        btn.className = 'dropbox-namespace-btn' + (isActive ? ' active' : '');
                         btn.dataset.namespaceId = ns.id;
                         btn.innerHTML = `
                             <i data-lucide="${ns.type === 'home' ? 'user' : 'users'}"></i>
@@ -3815,11 +3858,6 @@
                                 optionsContainer.appendChild(btn);
                             });
                         }
-                    }
-                    
-                    // Set default namespace
-                    if (namespaces.length > 0) {
-                        currentDropboxNamespace = namespaces[0].id;
                     }
                 } else {
                     namespaceSection.style.display = 'none';
@@ -4002,10 +4040,336 @@
                 showToast('Error connecting to Dropbox', 'error');
             } finally {
                 listBtn.disabled = false;
-                listBtn.innerHTML = '<i data-lucide="search"></i> List Files';
+                listBtn.innerHTML = '<i data-lucide="search"></i> Browse';
                 lucide.createIcons();
             }
         }
+        
+        let scanEventSource = null;
+        
+        async function scanAllDropboxFiles() {
+            const folderPath = document.getElementById('dropboxFolderPath').value.trim();
+            const scanBtn = document.getElementById('dropboxScanBtn');
+            const listBtn = document.getElementById('dropboxListBtn');
+            const fileListSection = document.getElementById('dropboxFileList');
+            const filesContainer = document.getElementById('dropboxFiles');
+            
+            // Close any existing scan
+            if (scanEventSource) {
+                scanEventSource.close();
+                scanEventSource = null;
+            }
+            
+                            scanBtn.disabled = false;
+            listBtn.disabled = true;
+            scanBtn.innerHTML = '<i data-lucide="square" style="fill: currentColor;"></i> Stop Scan';
+            scanBtn.onclick = stopDropboxScan;
+            lucide.createIcons();
+            
+            // Reset state
+            dropboxFiles = [];
+            dropboxFolders = [];
+            selectedDropboxFiles.clear();
+            
+            fileListSection.style.display = 'block';
+            filesContainer.innerHTML = '<div style="padding: 16px; text-align: center; color: var(--text-muted);"><i data-lucide="loader-2" class="spin" style="width: 24px; height: 24px;"></i><br>Scanning Dropbox for audio files...</div>';
+            document.getElementById('dropboxFileCount').textContent = 'Scanning...';
+            lucide.createIcons();
+            
+            try {
+                const url = '/dropbox/scan_all' + (folderPath ? `?folder_path=${encodeURIComponent(folderPath)}` : '');
+                scanEventSource = new EventSource(url);
+                
+                let totalSize = 0;
+                let isFirstFile = true;
+                
+                scanEventSource.onmessage = function(event) {
+                    const data = JSON.parse(event.data);
+                    
+                    if (data.error) {
+                        showToast(data.error, 'error');
+                        scanEventSource.close();
+                        scanEventSource = null;
+                        resetScanButton();
+                        return;
+                    }
+                    
+                    if (data.status === 'info' || data.status === 'scanning') {
+                        // Status message
+                        console.log('Scan status:', data.message);
+                    } else if (data.status === 'progress') {
+                        // Progress update
+                        document.getElementById('dropboxFileCount').textContent = 
+                            `Found ${data.count} files (${data.size_mb} MB) - scanning...`;
+                    } else if (data.status === 'complete') {
+                        // Scan complete
+                        document.getElementById('dropboxFileCount').textContent = 
+                            `Found ${data.total_files} audio files (${data.total_size_mb.toFixed(1)} MB total)`;
+                        showToast(`Scan complete! Found ${data.total_files} audio files`, 'success');
+                        scanEventSource.close();
+                        scanEventSource = null;
+                        resetScanButton();
+                        updateDropboxImportButton();
+                    } else if (data.type === 'file') {
+                        // New file found - add to list
+                        if (isFirstFile) {
+                            filesContainer.innerHTML = '';
+                            isFirstFile = false;
+                        }
+                        
+                        dropboxFiles.push(data);
+                        totalSize += data.size_mb;
+                        
+                        const index = data.index;
+                        const item = document.createElement('div');
+                        item.className = 'dropbox-file-item';
+                        item.dataset.index = index;
+                        item.innerHTML = `
+                            <div class="dropbox-file-checkbox">
+                                <input type="checkbox" id="dropbox-file-${index}">
+                            </div>
+                            <div class="dropbox-file-info">
+                                <div class="dropbox-file-name">${data.name}</div>
+                                <div class="dropbox-file-path">${data.folder || '/'}</div>
+                            </div>
+                            <div class="dropbox-file-size">${data.size_mb} MB</div>
+                        `;
+                        item.addEventListener('click', (e) => {
+                            if (e.target.type !== 'checkbox') {
+                                toggleDropboxFile(index);
+                            }
+                        });
+                        filesContainer.appendChild(item);
+                        
+                        // Update count
+                        document.getElementById('dropboxFileCount').textContent = 
+                            `Found ${dropboxFiles.length} files (${totalSize.toFixed(1)} MB) - scanning...`;
+                        
+                        // Auto-scroll to show new file
+                        filesContainer.scrollTop = filesContainer.scrollHeight;
+                    }
+                };
+                
+                scanEventSource.onerror = function(error) {
+                    console.error('Scan error:', error);
+                    if (dropboxFiles.length === 0) {
+                        filesContainer.innerHTML = '<div style="padding: 32px; text-align: center; color: var(--text-muted);">No MP3 or WAV files found</div>';
+                    }
+                    scanEventSource.close();
+                    scanEventSource = null;
+                    resetScanButton();
+                };
+                
+            } catch (error) {
+                console.error('Error scanning Dropbox:', error);
+                showToast('Error scanning Dropbox', 'error');
+                resetScanButton();
+            }
+            
+            function resetScanButton() {
+                scanBtn.disabled = false;
+                listBtn.disabled = false;
+                scanBtn.innerHTML = '<i data-lucide="scan"></i> Scan';
+                scanBtn.onclick = scanAllDropboxFiles;
+                lucide.createIcons();
+            }
+        }
+        
+        function stopDropboxScan() {
+            if (scanEventSource) {
+                scanEventSource.close();
+                scanEventSource = null;
+                document.getElementById('dropboxScanBtn').disabled = false;
+                document.getElementById('dropboxListBtn').disabled = false;
+                document.getElementById('dropboxScanBtn').innerHTML = '<i data-lucide="scan"></i> Scan';
+                lucide.createIcons();
+            }
+        }
+        
+        // =============================================================================
+        // BULK IMPORT FUNCTIONS
+        // =============================================================================
+        
+        let bulkImportPolling = null;
+        
+        async function startBulkImport() {
+            const folderPath = document.getElementById('dropboxFolderPath').value.trim();
+            
+            if (!confirm(`🚀 BULK IMPORT\n\nThis will import ALL audio files from "${folderPath || 'your entire Dropbox'}":\n\n• Download files (like selecting files)\n• Process with all ${window.numWorkers || 'available'} workers\n• Show in "All Tracks" list\n• DELETE from Dropbox when each succeeds\n\n⚠️ Successfully processed files will be REMOVED from Dropbox!\nFailed files stay in Dropbox for retry.\n\nContinue?`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/dropbox/bulk_import/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ folder_path: folderPath })
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    showToast(data.error || 'Failed to start bulk import', 'error');
+                    return;
+                }
+                
+                showToast('Bulk import started!', 'success');
+                showBulkImportPanel();
+                startBulkImportPolling();
+                
+            } catch (error) {
+                console.error('Error starting bulk import:', error);
+                showToast('Error starting bulk import', 'error');
+            }
+        }
+        
+        async function stopBulkImport() {
+            try {
+                const response = await fetch('/dropbox/bulk_import/stop', {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                showToast(data.message || 'Stop requested', 'info');
+                
+            } catch (error) {
+                console.error('Error stopping bulk import:', error);
+            }
+        }
+        
+        function showBulkImportPanel() {
+            document.getElementById('bulkImportPanel').style.display = 'block';
+            document.getElementById('bulkStopBtn').style.display = 'inline-flex';
+            lucide.createIcons();
+        }
+        
+        function hideBulkImportPanel() {
+            // Don't hide, just update to show completed state
+        }
+        
+        function startBulkImportPolling() {
+            if (bulkImportPolling) {
+                clearInterval(bulkImportPolling);
+            }
+            
+            // Poll immediately
+            updateBulkImportStatus();
+            
+            // Then poll every 2 seconds
+            bulkImportPolling = setInterval(updateBulkImportStatus, 2000);
+        }
+        
+        async function updateBulkImportStatus() {
+            try {
+                const response = await fetch('/dropbox/bulk_import/status');
+                const data = await response.json();
+                
+                const panel = document.getElementById('bulkImportPanel');
+                const statusEl = document.getElementById('bulkImportStatus');
+                const progressBar = document.getElementById('bulkProgressBar');
+                const progressText = document.getElementById('bulkProgressText');
+                const currentFile = document.getElementById('bulkCurrentFile');
+                const stats = document.getElementById('bulkStats');
+                const stopBtn = document.getElementById('bulkStopBtn');
+                
+                // Show panel if import is active or was recently active
+                if (data.active || data.status !== 'idle') {
+                    panel.style.display = 'block';
+                }
+                
+                // Update status text
+                const statusLabels = {
+                    'idle': 'No import running',
+                    'starting': 'Starting...',
+                    'scanning': '🔍 Scanning Dropbox...',
+                    'downloading': `⬇️ Downloading... (${data.downloaded || 0}/${data.total_found || 0})`,
+                    'separating': `🎵 Workers processing...`,
+                    'processing': `⚙️ Workers processing...`,
+                    'stopping': '⏸️ Stopping...',
+                    'stopped': '⏹️ Stopped',
+                    'complete': `✅ Complete! ${data.processed || 0} processed`,
+                    'error': '❌ Error'
+                };
+                statusEl.textContent = statusLabels[data.status] || data.status;
+                
+                // Update progress bar
+                const total = data.total_found || 0;
+                const processed = data.processed || 0;
+                const percent = total > 0 ? Math.round((processed / total) * 100) : 0;
+                progressBar.style.width = `${percent}%`;
+                
+                // Update text
+                if (data.status === 'scanning') {
+                    progressText.textContent = `Found ${data.total_found} audio files...`;
+                } else {
+                    progressText.textContent = `${processed} / ${total} files processed`;
+                }
+                
+                // Current file
+                if (data.current_file) {
+                    let statusIcon = '⬇️';
+                    if (data.status === 'separating') statusIcon = '🎵';
+                    else if (data.status === 'downloading') statusIcon = '⬇️';
+                    else if (data.status === 'processing') statusIcon = '⚙️';
+                    currentFile.textContent = `${statusIcon} ${data.current_file}`;
+                } else {
+                    currentFile.textContent = '';
+                }
+                
+                // Stats
+                let statsText = [];
+                if (data.downloaded > 0) statsText.push(`⬇️ ${data.downloaded}`);
+                if (data.processed > 0) statsText.push(`✅ ${data.processed}`);
+                if (data.skipped > 0) statsText.push(`⏭️ ${data.skipped}`);
+                if (data.failed > 0) statsText.push(`❌ ${data.failed}`);
+                if (data.queue_size > 0) statsText.push(`📋 ${data.queue_size} remaining`);
+                if (data.duration_seconds) {
+                    const mins = Math.floor(data.duration_seconds / 60);
+                    const secs = data.duration_seconds % 60;
+                    statsText.push(`⏱️ ${mins}m ${secs}s`);
+                }
+                stats.textContent = statsText.join(' | ');
+                
+                // Show/hide stop button
+                stopBtn.style.display = data.active ? 'inline-flex' : 'none';
+                
+                // Stop polling if complete
+                if (!data.active && data.status !== 'idle') {
+                    if (data.status === 'complete') {
+                        showToast(`Bulk import complete! ${processed} files processed.`, 'success');
+                    } else if (data.status === 'stopped') {
+                        showToast('Bulk import stopped.', 'info');
+                    } else if (data.status === 'error') {
+                        showToast(`Bulk import error: ${data.error}`, 'error');
+                    }
+                    
+                    // Keep polling less frequently to allow viewing final status
+                    if (bulkImportPolling) {
+                        clearInterval(bulkImportPolling);
+                        bulkImportPolling = null;
+                    }
+                }
+                
+                lucide.createIcons();
+                
+            } catch (error) {
+                console.error('Error fetching bulk import status:', error);
+            }
+        }
+        
+        // Check for active bulk import on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            // Check bulk import status on load
+            fetch('/dropbox/bulk_import/status')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.active || (data.status && data.status !== 'idle')) {
+                        showBulkImportPanel();
+                        startBulkImportPolling();
+                    }
+                })
+                .catch(() => {});
+        });
         
         function toggleDropboxFile(index) {
             if (selectedDropboxFiles.has(index)) {

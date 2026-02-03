@@ -79,13 +79,41 @@ PENDING_WARNING_THRESHOLD = int(os.environ.get('PENDING_WARNING_THRESHOLD', 1000
 # =============================================================================
 # Set DROPBOX_ACCESS_TOKEN in your .env file
 # Get your token from: https://www.dropbox.com/developers/apps
+# For Dropbox Business team tokens, also set DROPBOX_TEAM_MEMBER_ID
 DROPBOX_ACCESS_TOKEN = os.environ.get('DROPBOX_ACCESS_TOKEN', '')
+DROPBOX_TEAM_MEMBER_ID = os.environ.get('DROPBOX_TEAM_MEMBER_ID', '')
 DROPBOX_FOLDER = os.path.join(BASE_DIR, 'dropbox_downloads')
 os.makedirs(DROPBOX_FOLDER, exist_ok=True)
 
 # Dropbox import tracking
 dropbox_imports = {}  # { import_id: { status, total, downloaded, processed, files, errors } }
 dropbox_imports_lock = Lock()
+
+# =============================================================================
+# PERSISTENT BULK IMPORT - Runs in background even if browser closes
+# =============================================================================
+bulk_import_state = {
+    'active': False,
+    'stop_requested': False,
+    'folder_path': '',
+    'namespace_id': '',
+    'started_at': None,
+    'total_found': 0,
+    'total_scanned': 0,
+    'downloaded': 0,
+    'processed': 0,
+    'failed': 0,
+    'skipped': 0,  # Tracks skipped due to banned keywords
+    'current_file': '',
+    'current_status': 'idle',  # idle, scanning, downloading, processing, complete, stopped, error
+    'files_queue': [],  # Files waiting to be processed
+    'completed_files': [],  # Successfully processed files
+    'failed_files': [],  # Failed files with error messages
+    'skipped_files': [],  # Skipped files with reasons
+    'error': None,
+    'last_update': None
+}
+bulk_import_lock = Lock()
 
 # =============================================================================
 # SEQUENTIAL PROCESSING MODE - Track individual file downloads
@@ -422,6 +450,353 @@ def detect_track_type_from_title(title):
         return 'Extended'
     
     return None
+
+
+# =============================================================================
+# TITLE CLEANING AND FILTERING SYSTEM
+# =============================================================================
+
+# Keywords that should cause track to be SKIPPED/DELETED (case-insensitive)
+SKIP_KEYWORDS = [
+    'rework', 're-work', 'boot', 'bootleg', 'mashup', 'mash-up', 'mash up',
+    'riddim', 'ridim', 'redrum', 're-drum', 'transition',
+    'hype', 'throwback hype', 'wordplay', 'tonalplay', 'tonal play', 'toneplay',
+    'beat intro', 'segway', 'segue', 'edit',
+    'blend', 'anthem', 'club', 'halloween', 'christmas', 'easter',
+    'countdown', 'private', 'party break',
+    'sample', 'chill mix', 'kidcutup', 'kid cut up',
+    'bounce back', 'chorus in', 'orchestral',
+    'da phonk', 'daphonk', 'epice intro', 'epic intro'
+]
+
+# Note: 'Remix' is a special case - we might want to keep some remixes
+# Add it separately so it can be easily toggled
+SKIP_REMIX = True
+if SKIP_REMIX:
+    SKIP_KEYWORDS.append('remix')
+
+# DJ/Pool names to replace with "ID By Rivoli" (case-insensitive)
+DJ_NAMES_TO_REPLACE = [
+    'BPM Supreme', 'Bpmsupreme', 'BPMSupreme',
+    'Hh', 'HH',
+    'Heavy Hits', 'HeavyHits', 'Heavy-Hits',
+    'Dj city', 'DJcity', 'DJ City',
+    'HMC',
+    'FuviClan', 'Fuvi Clan', 'Fuvi-Clan',
+    'Bangerz Army', 'BangerzArmy', 'Bangerz-Army',
+    'BarBangerz', 'Bar Bangerz', 'Bar-Bangerz',
+    'Beatfreakz', 'Beat Freakz', 'Beat-Freakz',
+    'Beatport',
+    'Bpm Latino', 'Bpmlatino', 'BPM Latino', 'BPMLatino',
+    'Club Killers', 'Clubkillers', 'Club-Killers',
+    'Crack4', 'Crack 4',
+    'Crooklyn Clan', 'CrooklynClan', 'Crooklyn-Clan',
+    'Da Throwbackz', 'DaThrowbackz', 'Da-Throwbackz',
+    'Direct Music Service', 'DirectMusicService', 'DMS',
+    'Dj BeatBreaker', 'DjBeatBreaker', 'DJ BeatBreaker', 'DJ Beat Breaker',
+    'DMC',
+    'Doing The Damage', 'DoingTheDamage', 'Doing-The-Damage',
+    'DJ Precise', 'DJPrecise',
+    'DJ Snake', 'DJSnake',
+    'X-Mix', 'XMix', 'X Mix',
+    'Dirty Dutch', 'DirtyDutch',
+    'Promo Only', 'PromoOnly',
+    'DJ Tools', 'DJTools',
+    'Select Mix', 'SelectMix',
+    'Ultimix',
+    'Funkymix', 'Funky Mix',
+]
+
+# Format standardization mappings
+FORMAT_MAPPINGS = {
+    'quick hit': 'Short',
+    'quickhit': 'Short',
+    'quick-hit': 'Short',
+    'cut': 'Short',
+    'acapella intro': 'Acap In',
+    'acap intro': 'Acap In',
+    'acapella outro': 'Acap Out',
+    'acap outro': 'Acap Out',
+    'acapella in': 'Acap In',
+    'acapella out': 'Acap Out',
+    'dirty intro': 'Intro',
+    'clean intro': 'Intro',
+    'hype intro': 'Intro',
+}
+
+# Track types/versions to generate
+TRACK_VERSIONS = ['Dirty', 'Clean']
+
+
+def should_skip_track(title):
+    """
+    Check if track should be skipped based on keywords in title.
+    Returns (should_skip: bool, reason: str or None)
+    """
+    if not title:
+        return False, None
+    
+    title_lower = title.lower()
+    
+    for keyword in SKIP_KEYWORDS:
+        if keyword.lower() in title_lower:
+            return True, f"Contains '{keyword}'"
+    
+    return False, None
+
+
+def clean_track_title(title):
+    """
+    Clean track title:
+    1. Replace DJ/pool names with "ID By Rivoli"
+    2. Standardize formats (Quick Hit -> Short, etc.)
+    3. Clean up parentheses
+    4. Ensure "ID By Rivoli" is in parentheses
+    
+    Returns cleaned title string.
+    """
+    if not title:
+        return title
+    
+    cleaned = title
+    
+    # Replace DJ/pool names with "ID By Rivoli" (case-insensitive)
+    for dj_name in DJ_NAMES_TO_REPLACE:
+        # Create case-insensitive pattern
+        pattern = re.compile(re.escape(dj_name), re.IGNORECASE)
+        cleaned = pattern.sub('ID By Rivoli', cleaned)
+    
+    # Apply format mappings (case-insensitive)
+    for old_format, new_format in FORMAT_MAPPINGS.items():
+        pattern = re.compile(re.escape(old_format), re.IGNORECASE)
+        cleaned = pattern.sub(new_format, cleaned)
+    
+    # Clean up double spaces
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    
+    # Clean up empty parentheses
+    cleaned = re.sub(r'\(\s*\)', '', cleaned)
+    
+    # Clean up double "ID By Rivoli"
+    cleaned = re.sub(r'ID By Rivoli\s+ID By Rivoli', 'ID By Rivoli', cleaned, flags=re.IGNORECASE)
+    
+    # Extract and reorganize version info (Dirty/Clean)
+    cleaned = reorganize_version_info(cleaned)
+    
+    return cleaned.strip()
+
+
+def reorganize_version_info(title):
+    """
+    Reorganize version info so Dirty/Clean is at the end in its own parentheses.
+    Example: (Hh Dirty Intro) -> (ID By Rivoli Intro) (Dirty)
+    """
+    if not title:
+        return title
+    
+    result = title
+    version_found = None
+    
+    # Check for Dirty/Clean inside parentheses and extract them
+    dirty_pattern = re.compile(r'\(\s*([^)]*?)\s*dirty\s*([^)]*?)\s*\)', re.IGNORECASE)
+    clean_pattern = re.compile(r'\(\s*([^)]*?)\s*clean\s*([^)]*?)\s*\)', re.IGNORECASE)
+    
+    # Check for Dirty
+    dirty_match = dirty_pattern.search(result)
+    if dirty_match:
+        before = dirty_match.group(1).strip()
+        after = dirty_match.group(2).strip()
+        content = f"{before} {after}".strip()
+        if content:
+            result = dirty_pattern.sub(f'({content})', result)
+        else:
+            result = dirty_pattern.sub('', result)
+        version_found = 'Dirty'
+    
+    # Check for Clean
+    clean_match = clean_pattern.search(result)
+    if clean_match:
+        before = clean_match.group(1).strip()
+        after = clean_match.group(2).strip()
+        content = f"{before} {after}".strip()
+        if content:
+            result = clean_pattern.sub(f'({content})', result)
+        else:
+            result = clean_pattern.sub('', result)
+        version_found = 'Clean'
+    
+    # Also check for standalone (Dirty) or (Clean)
+    if re.search(r'\(dirty\)', result, re.IGNORECASE):
+        result = re.sub(r'\s*\(dirty\)', '', result, flags=re.IGNORECASE)
+        version_found = 'Dirty'
+    if re.search(r'\(clean\)', result, re.IGNORECASE):
+        result = re.sub(r'\s*\(clean\)', '', result, flags=re.IGNORECASE)
+        version_found = 'Clean'
+    
+    # Add version at the end if found
+    if version_found:
+        result = f"{result.strip()} ({version_found})"
+    
+    # Clean up multiple spaces
+    result = re.sub(r'\s+', ' ', result)
+    
+    return result.strip()
+
+
+def extract_track_metadata(title):
+    """
+    Extract metadata from track title.
+    Returns dict with: base_title, version (Dirty/Clean), format_type, is_acapella, etc.
+    """
+    metadata = {
+        'original_title': title,
+        'base_title': title,
+        'version': None,  # Dirty or Clean
+        'format_type': None,  # Short, Intro, Outro, Acap In, Acap Out, etc.
+        'is_acapella': False,
+        'is_acapella_loop': False,
+        'is_verse': False,
+        'bpm': None,
+    }
+    
+    if not title:
+        return metadata
+    
+    title_lower = title.lower()
+    
+    # Detect version
+    if 'dirty' in title_lower:
+        metadata['version'] = 'Dirty'
+    elif 'clean' in title_lower:
+        metadata['version'] = 'Clean'
+    
+    # Detect format type
+    if 'acap in' in title_lower or 'acapella intro' in title_lower:
+        metadata['format_type'] = 'Acap In'
+        metadata['is_acapella'] = True
+    elif 'acap out' in title_lower or 'acapella outro' in title_lower:
+        metadata['format_type'] = 'Acap Out'
+        metadata['is_acapella'] = True
+    elif 'acapella loop' in title_lower or 'acap loop' in title_lower:
+        metadata['format_type'] = 'Acapella Loop'
+        metadata['is_acapella'] = True
+        metadata['is_acapella_loop'] = True
+    elif 'acapella' in title_lower or 'a capella' in title_lower:
+        metadata['format_type'] = 'Acapella'
+        metadata['is_acapella'] = True
+    elif 'short' in title_lower or 'quick hit' in title_lower:
+        metadata['format_type'] = 'Short'
+    elif 'intro' in title_lower:
+        metadata['format_type'] = 'Intro'
+    elif 'outro' in title_lower:
+        metadata['format_type'] = 'Outro'
+    elif 'verse' in title_lower:
+        metadata['format_type'] = 'Verse'
+        metadata['is_verse'] = True
+    
+    # Extract BPM if present (e.g., "120 BPM" or "(120)")
+    bpm_match = re.search(r'(\d{2,3})\s*bpm', title_lower)
+    if bpm_match:
+        metadata['bpm'] = int(bpm_match.group(1))
+    
+    return metadata
+
+
+def generate_version_titles(base_title, format_type=None):
+    """
+    Generate both Dirty and Clean versions of a title.
+    Returns list of (title, version) tuples.
+    
+    Example input: "Best Friend (ID By Rivoli Acap In)"
+    Returns: [
+        ("Best Friend (ID By Rivoli Acap In) (Dirty)", "Dirty"),
+        ("Best Friend (ID By Rivoli Acap In) (Clean)", "Clean")
+    ]
+    """
+    # Remove existing version markers
+    clean_base = re.sub(r'\s*\((dirty|clean)\)\s*', '', base_title, flags=re.IGNORECASE).strip()
+    
+    versions = []
+    for version in TRACK_VERSIONS:
+        version_title = f"{clean_base} ({version})"
+        versions.append((version_title, version))
+    
+    return versions
+
+
+def process_track_title_for_import(original_title, original_filename=None):
+    """
+    Main function to process a track title for import.
+    
+    Returns dict with:
+    - skip: bool - whether to skip this track
+    - skip_reason: str - reason for skipping (if skip=True)
+    - cleaned_title: str - cleaned title
+    - versions: list - list of (title, version) tuples for Dirty/Clean
+    - metadata: dict - extracted metadata
+    """
+    result = {
+        'skip': False,
+        'skip_reason': None,
+        'original_title': original_title,
+        'cleaned_title': original_title,
+        'versions': [],
+        'metadata': {}
+    }
+    
+    # Use filename as fallback
+    title_to_process = original_title or original_filename
+    if not title_to_process:
+        return result
+    
+    # Check if should skip
+    should_skip, reason = should_skip_track(title_to_process)
+    if should_skip:
+        result['skip'] = True
+        result['skip_reason'] = reason
+        return result
+    
+    # Clean the title
+    cleaned = clean_track_title(title_to_process)
+    result['cleaned_title'] = cleaned
+    
+    # Extract metadata
+    result['metadata'] = extract_track_metadata(cleaned)
+    
+    # Generate Dirty/Clean versions
+    result['versions'] = generate_version_titles(cleaned)
+    
+    return result
+
+
+def delete_from_dropbox_if_skipped(dropbox_path, dropbox_token, dropbox_team_member_id=None, namespace_id=None):
+    """
+    Delete a file from Dropbox (used when track is skipped due to keywords).
+    """
+    try:
+        delete_headers = {
+            'Authorization': f'Bearer {dropbox_token}',
+            'Content-Type': 'application/json'
+        }
+        if dropbox_team_member_id:
+            delete_headers['Dropbox-API-Select-User'] = dropbox_team_member_id
+        if namespace_id:
+            delete_headers['Dropbox-API-Path-Root'] = json.dumps({'.tag': 'namespace_id', 'namespace_id': namespace_id})
+        
+        delete_response = requests.post(
+            'https://api.dropboxapi.com/2/files/delete_v2',
+            headers=delete_headers,
+            json={'path': dropbox_path}
+        )
+        
+        return delete_response.status_code == 200
+    except Exception as e:
+        print(f"⚠️  Error deleting from Dropbox: {e}")
+        return False
+
+
+# Log the configuration
+print(f"🏷️  Title Cleaning: {len(SKIP_KEYWORDS)} skip keywords, {len(DJ_NAMES_TO_REPLACE)} DJ names to replace")
 
 def add_to_upload_history(filename, session_id, status='uploaded', track_type='Unknown', error=None):
     """Add or update a file in the upload history."""
@@ -3955,8 +4330,9 @@ def dropbox_list_files():
     
     # Re-read token from environment
     dropbox_token = os.environ.get('DROPBOX_ACCESS_TOKEN', '') or DROPBOX_ACCESS_TOKEN
+    dropbox_team_member_id = os.environ.get('DROPBOX_TEAM_MEMBER_ID', '') or DROPBOX_TEAM_MEMBER_ID
     
-    print(f"📦 Dropbox list request - Token configured: {bool(dropbox_token)}, Token length: {len(dropbox_token) if dropbox_token else 0}")
+    print(f"📦 Dropbox list request - Token configured: {bool(dropbox_token)}, Token length: {len(dropbox_token) if dropbox_token else 0}, Team member ID: {bool(dropbox_team_member_id)}")
     
     if not dropbox_token:
         return jsonify({'error': 'Dropbox not configured. Set DROPBOX_ACCESS_TOKEN in .env'}), 400
@@ -3964,7 +4340,6 @@ def dropbox_list_files():
     data = request.json or {}
     folder_path = data.get('folder_path', '').strip()
     namespace_id = data.get('namespace_id', '')
-    print(f"📦 Dropbox folder path: '{folder_path}', namespace: '{namespace_id}'")
     
     # Normalize path - Dropbox API expects empty string for root or path starting with /
     if folder_path and not folder_path.startswith('/'):
@@ -3978,6 +4353,36 @@ def dropbox_list_files():
             'Authorization': f'Bearer {dropbox_token}',
             'Content-Type': 'application/json'
         }
+        
+        # Add team member header for Dropbox Business team tokens
+        if dropbox_team_member_id:
+            headers['Dropbox-API-Select-User'] = dropbox_team_member_id
+        
+        # AUTO-DETECT root namespace for team accounts if not provided
+        # This is crucial for accessing content inside team folders
+        if not namespace_id and dropbox_team_member_id:
+            try:
+                # Note: get_current_account requires no JSON body
+                account_headers = {
+                    'Authorization': f'Bearer {dropbox_token}',
+                    'Dropbox-API-Select-User': dropbox_team_member_id
+                }
+                account_response = requests.post(
+                    'https://api.dropboxapi.com/2/users/get_current_account',
+                    headers=account_headers
+                )
+                if account_response.status_code == 200:
+                    account_data = account_response.json()
+                    root_info = account_data.get('root_info', {})
+                    # Use root_namespace_id for team folders
+                    root_ns = root_info.get('root_namespace_id')
+                    if root_ns:
+                        namespace_id = root_ns
+                        print(f"📦 Auto-detected root namespace: {namespace_id}")
+            except Exception as e:
+                print(f"⚠️ Could not auto-detect namespace: {e}")
+        
+        print(f"📦 Dropbox folder path: '{folder_path}', namespace: '{namespace_id}'")
         
         # Add namespace header for team folders
         if namespace_id:
@@ -4081,6 +4486,721 @@ def dropbox_list_files():
         return jsonify({'error': f'Error listing Dropbox folder: {str(e)}'}), 500
 
 
+@app.route('/dropbox/scan_all', methods=['GET'])
+def dropbox_scan_all_files():
+    """
+    Recursively scan entire Dropbox (or a folder) for all MP3/WAV files.
+    Uses Server-Sent Events to stream results in real-time.
+    
+    Query params:
+    - folder_path: Optional starting folder (empty for entire Dropbox)
+    
+    Returns SSE stream with files as they are found.
+    """
+    from flask import Response, stream_with_context
+    
+    load_dotenv(override=True)
+    
+    dropbox_token = os.environ.get('DROPBOX_ACCESS_TOKEN', '') or DROPBOX_ACCESS_TOKEN
+    dropbox_team_member_id = os.environ.get('DROPBOX_TEAM_MEMBER_ID', '') or DROPBOX_TEAM_MEMBER_ID
+    
+    folder_path = request.args.get('folder_path', '').strip()
+    
+    # Normalize path
+    if folder_path and not folder_path.startswith('/'):
+        folder_path = '/' + folder_path
+    if folder_path == '/':
+        folder_path = ''
+    
+    def generate():
+        try:
+            print(f"📦 Dropbox SCAN ALL (streaming) - Folder: '{folder_path or '(root)'}'")
+            
+            if not dropbox_token:
+                yield f"data: {json.dumps({'error': 'Dropbox not configured'})}\n\n"
+                return
+            
+            headers = {
+                'Authorization': f'Bearer {dropbox_token}',
+                'Content-Type': 'application/json'
+            }
+            
+            if dropbox_team_member_id:
+                headers['Dropbox-API-Select-User'] = dropbox_team_member_id
+            
+            # AUTO-DETECT root namespace for team accounts
+            namespace_id = ''
+            if dropbox_team_member_id:
+                try:
+                    account_headers = {
+                        'Authorization': f'Bearer {dropbox_token}',
+                        'Dropbox-API-Select-User': dropbox_team_member_id
+                    }
+                    account_response = requests.post(
+                        'https://api.dropboxapi.com/2/users/get_current_account',
+                        headers=account_headers
+                    )
+                    if account_response.status_code == 200:
+                        account_data = account_response.json()
+                        root_info = account_data.get('root_info', {})
+                        namespace_id = root_info.get('root_namespace_id', '')
+                        if namespace_id:
+                            print(f"📦 Scan: Using root namespace: {namespace_id}")
+                            yield f"data: {json.dumps({'status': 'info', 'message': f'Using team namespace: {namespace_id[:8]}...'})}\n\n"
+                except Exception as e:
+                    print(f"⚠️ Namespace detection error: {e}")
+            
+            if namespace_id:
+                headers['Dropbox-API-Path-Root'] = json.dumps({'.tag': 'namespace_id', 'namespace_id': namespace_id})
+            
+            yield f"data: {json.dumps({'status': 'scanning', 'message': 'Starting scan...'})}\n\n"
+            
+            file_count = 0
+            total_size = 0
+            has_more = True
+            cursor = None
+            
+            while has_more:
+                if cursor:
+                    response = requests.post(
+                        'https://api.dropboxapi.com/2/files/list_folder/continue',
+                        headers=headers,
+                        json={'cursor': cursor}
+                    )
+                else:
+                    response = requests.post(
+                        'https://api.dropboxapi.com/2/files/list_folder',
+                        headers=headers,
+                        json={
+                            'path': folder_path,
+                            'recursive': True,
+                            'include_media_info': False,
+                            'include_deleted': False,
+                            'limit': 2000
+                        }
+                    )
+                
+                if response.status_code != 200:
+                    error_data = response.json() if response.text else {}
+                    error_msg = error_data.get('error_summary', response.text or 'Unknown error')
+                    print(f"❌ Dropbox scan error: {error_msg}")
+                    yield f"data: {json.dumps({'error': error_msg})}\n\n"
+                    return
+                
+                result = response.json()
+                entries = result.get('entries', [])
+                
+                # Stream each audio file as it's found
+                for entry in entries:
+                    if entry.get('.tag') == 'file':
+                        name = entry.get('name', '').lower()
+                        if name.endswith('.mp3') or name.endswith('.wav'):
+                            file_count += 1
+                            size_mb = round(entry.get('size', 0) / (1024 * 1024), 2)
+                            total_size += size_mb
+                            
+                            file_data = {
+                                'type': 'file',
+                                'index': file_count - 1,
+                                'name': entry.get('name'),
+                                'path': entry.get('path_display'),
+                                'path_lower': entry.get('path_lower'),
+                                'size': entry.get('size', 0),
+                                'size_mb': size_mb,
+                                'id': entry.get('id'),
+                                'folder': os.path.dirname(entry.get('path_display', ''))
+                            }
+                            
+                            print(f"📦 Found: {entry.get('name')} ({size_mb} MB)")
+                            yield f"data: {json.dumps(file_data)}\n\n"
+                
+                has_more = result.get('has_more', False)
+                cursor = result.get('cursor')
+                
+                # Send progress update
+                if has_more:
+                    yield f"data: {json.dumps({'status': 'progress', 'count': file_count, 'size_mb': round(total_size, 2)})}\n\n"
+            
+            # Send completion message
+            print(f"📦 SCAN COMPLETE: {file_count} files ({total_size:.1f} MB)")
+            yield f"data: {json.dumps({'status': 'complete', 'total_files': file_count, 'total_size_mb': round(total_size, 2)})}\n\n"
+            
+        except Exception as e:
+            import traceback
+            print(f"❌ Scan error: {str(e)}")
+            print(traceback.format_exc())
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+    
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no'
+        }
+    )
+
+
+# =============================================================================
+# BULK IMPORT - Persistent background processing
+# =============================================================================
+
+@app.route('/dropbox/bulk_import/start', methods=['POST'])
+def start_bulk_import():
+    """
+    Start a bulk import from Dropbox. Scans recursively and processes each track.
+    Runs in background - continues even if browser closes.
+    """
+    global bulk_import_state
+    
+    with bulk_import_lock:
+        if bulk_import_state['active']:
+            return jsonify({
+                'error': 'A bulk import is already running',
+                'status': bulk_import_state['current_status']
+            }), 400
+    
+    load_dotenv(override=True)
+    
+    dropbox_token = os.environ.get('DROPBOX_ACCESS_TOKEN', '') or DROPBOX_ACCESS_TOKEN
+    dropbox_team_member_id = os.environ.get('DROPBOX_TEAM_MEMBER_ID', '') or DROPBOX_TEAM_MEMBER_ID
+    
+    if not dropbox_token:
+        return jsonify({'error': 'Dropbox not configured'}), 400
+    
+    data = request.json or {}
+    folder_path = data.get('folder_path', '').strip()
+    
+    # Normalize path
+    if folder_path and not folder_path.startswith('/'):
+        folder_path = '/' + folder_path
+    if folder_path == '/':
+        folder_path = ''
+    
+    # Reset state
+    with bulk_import_lock:
+        bulk_import_state = {
+            'active': True,
+            'stop_requested': False,
+            'folder_path': folder_path,
+            'namespace_id': '',
+            'started_at': time.time(),
+            'total_found': 0,
+            'total_scanned': 0,
+            'downloaded': 0,
+            'processed': 0,
+            'failed': 0,
+            'skipped': 0,
+            'current_file': '',
+            'current_status': 'starting',
+            'files_queue': [],
+            'completed_files': [],
+            'failed_files': [],
+            'skipped_files': [],
+            'error': None,
+            'last_update': time.time()
+        }
+    
+    # Start background thread
+    thread = threading.Thread(
+        target=bulk_import_background_thread,
+        args=(dropbox_token, dropbox_team_member_id, folder_path),
+        daemon=True
+    )
+    thread.start()
+    
+    print(f"🚀 BULK IMPORT STARTED for folder: '{folder_path or '(root)'}'")
+    
+    return jsonify({
+        'success': True,
+        'message': f'Bulk import started for {folder_path or "entire Dropbox"}',
+        'status': 'starting'
+    })
+
+
+@app.route('/dropbox/bulk_import/status')
+def get_bulk_import_status():
+    """Get current status of bulk import. Works even after browser reconnects."""
+    with bulk_import_lock:
+        # Calculate duration
+        duration = None
+        if bulk_import_state['started_at']:
+            duration = int(time.time() - bulk_import_state['started_at'])
+        
+        return jsonify({
+            'active': bulk_import_state['active'],
+            'status': bulk_import_state['current_status'],
+            'folder_path': bulk_import_state['folder_path'],
+            'total_found': bulk_import_state['total_found'],
+            'downloaded': bulk_import_state['downloaded'],
+            'processed': bulk_import_state['processed'],
+            'failed': bulk_import_state['failed'],
+            'skipped': bulk_import_state['skipped'],
+            'current_file': bulk_import_state['current_file'],
+            'queue_size': len(bulk_import_state['files_queue']),
+            'completed_count': len(bulk_import_state['completed_files']),
+            'failed_files': bulk_import_state['failed_files'][-10:],  # Last 10 failures
+            'skipped_files': bulk_import_state['skipped_files'][-10:],  # Last 10 skipped
+            'error': bulk_import_state['error'],
+            'duration_seconds': duration,
+            'last_update': bulk_import_state['last_update']
+        })
+
+
+@app.route('/dropbox/bulk_import/stop', methods=['POST'])
+def stop_bulk_import():
+    """Request to stop the bulk import."""
+    global bulk_import_state
+    
+    with bulk_import_lock:
+        if not bulk_import_state['active']:
+            return jsonify({'message': 'No bulk import is running'}), 200
+        
+        bulk_import_state['stop_requested'] = True
+        bulk_import_state['current_status'] = 'stopping'
+        bulk_import_state['last_update'] = time.time()
+    
+    print("⏹️ BULK IMPORT STOP REQUESTED")
+    
+    return jsonify({
+        'success': True,
+        'message': 'Stop requested. Import will stop after current file.'
+    })
+
+
+def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_path):
+    """
+    Background thread that downloads files from Dropbox and uses the CLASSIC workflow.
+    
+    Dropbox download = Just like "Select Files" in the UI
+    Then uses the exact same processing as normal uploads.
+    
+    After each track completes successfully, delete from Dropbox.
+    """
+    global bulk_import_state
+    
+    try:
+        # Setup headers
+        headers = {
+            'Authorization': f'Bearer {dropbox_token}',
+            'Content-Type': 'application/json'
+        }
+        
+        if dropbox_team_member_id:
+            headers['Dropbox-API-Select-User'] = dropbox_team_member_id
+        
+        # Auto-detect namespace
+        namespace_id = ''
+        if dropbox_team_member_id:
+            try:
+                account_headers = {
+                    'Authorization': f'Bearer {dropbox_token}',
+                    'Dropbox-API-Select-User': dropbox_team_member_id
+                }
+                account_response = requests.post(
+                    'https://api.dropboxapi.com/2/users/get_current_account',
+                    headers=account_headers
+                )
+                if account_response.status_code == 200:
+                    account_data = account_response.json()
+                    root_info = account_data.get('root_info', {})
+                    namespace_id = root_info.get('root_namespace_id', '')
+                    if namespace_id:
+                        print(f"📦 Bulk Import: Using namespace {namespace_id}")
+                        with bulk_import_lock:
+                            bulk_import_state['namespace_id'] = namespace_id
+            except Exception as e:
+                print(f"⚠️ Namespace detection error: {e}")
+        
+        if namespace_id:
+            headers['Dropbox-API-Path-Root'] = json.dumps({'.tag': 'namespace_id', 'namespace_id': namespace_id})
+        
+        # PHASE 1: Scan for all files
+        with bulk_import_lock:
+            bulk_import_state['current_status'] = 'scanning'
+            bulk_import_state['last_update'] = time.time()
+        
+        print(f"📦 Scanning '{folder_path or '(root)'}' recursively...")
+        
+        all_files = []
+        has_more = True
+        cursor = None
+        
+        while has_more:
+            # Check for stop request
+            with bulk_import_lock:
+                if bulk_import_state['stop_requested']:
+                    bulk_import_state['current_status'] = 'stopped'
+                    bulk_import_state['active'] = False
+                    bulk_import_state['last_update'] = time.time()
+                    print("⏹️ Bulk import stopped during scan")
+                    return
+            
+            if cursor:
+                response = requests.post(
+                    'https://api.dropboxapi.com/2/files/list_folder/continue',
+                    headers=headers,
+                    json={'cursor': cursor}
+                )
+            else:
+                response = requests.post(
+                    'https://api.dropboxapi.com/2/files/list_folder',
+                    headers=headers,
+                    json={
+                        'path': folder_path,
+                        'recursive': True,
+                        'include_media_info': False,
+                        'include_deleted': False,
+                        'limit': 2000
+                    }
+                )
+            
+            if response.status_code != 200:
+                error_msg = response.json().get('error_summary', 'Unknown error') if response.text else 'Unknown error'
+                with bulk_import_lock:
+                    bulk_import_state['error'] = error_msg
+                    bulk_import_state['current_status'] = 'error'
+                    bulk_import_state['active'] = False
+                    bulk_import_state['last_update'] = time.time()
+                print(f"❌ Scan error: {error_msg}")
+                return
+            
+            result = response.json()
+            
+            for entry in result.get('entries', []):
+                if entry.get('.tag') == 'file':
+                    name = entry.get('name', '').lower()
+                    if name.endswith('.mp3') or name.endswith('.wav'):
+                        all_files.append({
+                            'name': entry.get('name'),
+                            'path': entry.get('path_display'),
+                            'size': entry.get('size', 0),
+                            'id': entry.get('id')
+                        })
+                        print(f"📦 Found: {entry.get('name')}")
+            
+            with bulk_import_lock:
+                bulk_import_state['total_scanned'] += len(result.get('entries', []))
+                bulk_import_state['total_found'] = len(all_files)
+                bulk_import_state['files_queue'] = all_files.copy()
+                bulk_import_state['last_update'] = time.time()
+            
+            has_more = result.get('has_more', False)
+            cursor = result.get('cursor')
+        
+        print(f"📦 Scan complete: {len(all_files)} audio files found")
+        
+        if len(all_files) == 0:
+            with bulk_import_lock:
+                bulk_import_state['current_status'] = 'complete'
+                bulk_import_state['active'] = False
+                bulk_import_state['last_update'] = time.time()
+            print("📦 No files to import")
+            return
+        
+        # PHASE 2: Download all files and queue them (like selecting files + clicking upload)
+        with bulk_import_lock:
+            bulk_import_state['current_status'] = 'downloading'
+            bulk_import_state['last_update'] = time.time()
+        
+        # Use the GLOBAL session for bulk import (so it shows in All Tracks)
+        bulk_session_id = 'global'
+        
+        # Map: safe_filename -> dropbox_path (for deletion after success)
+        dropbox_paths = {}
+        dropbox_paths_lock = Lock()
+        
+        # Download concurrency - match number of workers for speed
+        download_workers = NUM_WORKERS
+        print(f"🚀 Downloading {len(all_files)} files with {download_workers} parallel downloads")
+        
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        # Track skipped files count
+        skipped_count = [0]  # Use list for mutability in nested function
+        
+        def download_file(file_info, index):
+            """Download a single file from Dropbox to upload folder."""
+            dropbox_path = file_info['path']
+            file_name = file_info['name']
+            
+            # Check for stop
+            with bulk_import_lock:
+                if bulk_import_state['stop_requested']:
+                    return {'status': 'stopped', 'name': file_name}
+            
+            # =====================================================
+            # TITLE FILTERING - Skip tracks with banned keywords
+            # =====================================================
+            title_result = process_track_title_for_import(file_name)
+            
+            if title_result['skip']:
+                print(f"⏭️  [{index+1}/{len(all_files)}] SKIPPING: {file_name}")
+                print(f"   Reason: {title_result['skip_reason']}")
+                
+                # Delete from Dropbox since it's a banned track
+                if delete_from_dropbox_if_skipped(dropbox_path, dropbox_token, dropbox_team_member_id, namespace_id):
+                    print(f"   🗑️  Deleted from Dropbox")
+                else:
+                    print(f"   ⚠️  Could not delete from Dropbox")
+                
+                skipped_count[0] += 1
+                with bulk_import_lock:
+                    bulk_import_state['skipped'] += 1
+                    bulk_import_state['skipped_files'].append({
+                        'name': file_name,
+                        'reason': title_result['skip_reason']
+                    })
+                    bulk_import_state['last_update'] = time.time()
+                
+                return {'status': 'skipped', 'name': file_name, 'reason': title_result['skip_reason']}
+            
+            try:
+                # Use cleaned title for the filename
+                cleaned_title = title_result['cleaned_title']
+                base_name = os.path.splitext(file_name)[0]
+                extension = os.path.splitext(file_name)[1]
+                
+                # Sanitize the cleaned filename
+                safe_filename = re.sub(r'[^\w\s\-\.]', '', cleaned_title).strip() or f'track_{index}'
+                safe_filename = safe_filename + extension
+                local_path = os.path.join(UPLOAD_FOLDER, safe_filename)
+                
+                print(f"⬇️  [{index+1}/{len(all_files)}] Downloading: {file_name}")
+                if cleaned_title != base_name:
+                    print(f"   → Cleaned: {cleaned_title}")
+                
+                download_headers = {
+                    'Authorization': f'Bearer {dropbox_token}',
+                    'Dropbox-API-Arg': json.dumps({'path': dropbox_path})
+                }
+                if dropbox_team_member_id:
+                    download_headers['Dropbox-API-Select-User'] = dropbox_team_member_id
+                if namespace_id:
+                    download_headers['Dropbox-API-Path-Root'] = json.dumps({'.tag': 'namespace_id', 'namespace_id': namespace_id})
+                
+                download_response = requests.post(
+                    'https://content.dropboxapi.com/2/files/download',
+                    headers=download_headers,
+                    stream=True
+                )
+                
+                if download_response.status_code != 200:
+                    raise Exception(f'Download failed: HTTP {download_response.status_code}')
+                
+                # Save file locally
+                with open(local_path, 'wb') as f:
+                    for chunk in download_response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                
+                with bulk_import_lock:
+                    bulk_import_state['downloaded'] += 1
+                    bulk_import_state['last_update'] = time.time()
+                
+                # Store mapping for Dropbox deletion
+                with dropbox_paths_lock:
+                    dropbox_paths[safe_filename] = dropbox_path
+                
+                print(f"✅ Downloaded: {file_name} -> {safe_filename}")
+                return {'status': 'ok', 'name': file_name, 'safe_filename': safe_filename, 'local_path': local_path}
+                
+            except Exception as e:
+                print(f"❌ Download failed: {file_name} - {str(e)}")
+                with bulk_import_lock:
+                    bulk_import_state['failed'] += 1
+                    bulk_import_state['failed_files'].append({
+                        'name': file_name,
+                        'error': str(e)
+                    })
+                    bulk_import_state['last_update'] = time.time()
+                return {'status': 'failed', 'name': file_name, 'error': str(e)}
+        
+        # Download all files in parallel
+        downloaded_files = []
+        with ThreadPoolExecutor(max_workers=download_workers) as executor:
+            futures = {
+                executor.submit(download_file, file_info, i): file_info
+                for i, file_info in enumerate(all_files)
+            }
+            
+            for future in as_completed(futures):
+                result = future.result()
+                if result['status'] == 'stopped':
+                    print("⏹️ Bulk import stopped during downloads")
+                    with bulk_import_lock:
+                        bulk_import_state['current_status'] = 'stopped'
+                        bulk_import_state['active'] = False
+                    return
+                elif result['status'] == 'ok':
+                    downloaded_files.append(result)
+        
+        print(f"📦 Downloaded {len(downloaded_files)} files. Now queueing for processing...")
+        
+        # PHASE 3: Queue all files for processing (CLASSIC WORKFLOW)
+        with bulk_import_lock:
+            bulk_import_state['current_status'] = 'processing'
+            bulk_import_state['last_update'] = time.time()
+        
+        for file_result in downloaded_files:
+            safe_filename = file_result['safe_filename']
+            
+            # Add to queue tracker (same as upload endpoint)
+            add_to_queue_tracker(safe_filename, bulk_session_id)
+            
+            # Queue item (same as upload endpoint)
+            track_queue.put({
+                'filename': safe_filename,
+                'session_id': bulk_session_id,
+                'is_retry': False
+            })
+            
+            print(f"📋 Queued: {safe_filename}")
+        
+        print(f"📦 All {len(downloaded_files)} files queued! Workers will process them.")
+        print(f"🚀 Using {NUM_WORKERS} workers for parallel processing")
+        
+        # PHASE 4: Monitor and delete from Dropbox when tracks complete
+        with bulk_import_lock:
+            bulk_import_state['current_file'] = f'Processing {len(downloaded_files)} tracks...'
+        
+        completed_tracks = set()
+        
+        while True:
+            # Check for stop
+            with bulk_import_lock:
+                if bulk_import_state['stop_requested']:
+                    bulk_import_state['current_status'] = 'stopped'
+                    bulk_import_state['active'] = False
+                    print("⏹️ Bulk import stopped")
+                    break
+            
+            time.sleep(3)  # Check every 3 seconds
+            
+            # Check queue items for completed tracks
+            with queue_items_lock:
+                for filename, info in list(queue_items.items()):
+                    if filename in dropbox_paths and filename not in completed_tracks:
+                        # Check if track is done (not in queue anymore or status is done/failed)
+                        if info.get('status') in ('done', 'failed') or filename not in queue_items:
+                            completed_tracks.add(filename)
+                            
+                            if info.get('status') == 'done' or info.get('status') not in ('waiting', 'processing', 'failed'):
+                                # SUCCESS - Delete from Dropbox
+                                dropbox_path = dropbox_paths[filename]
+                                with bulk_import_lock:
+                                    bulk_import_state['processed'] += 1
+                                    bulk_import_state['completed_files'].append(filename)
+                                    bulk_import_state['last_update'] = time.time()
+                                
+                                try:
+                                    print(f"🗑️  Deleting from Dropbox: {filename}")
+                                    delete_headers = {
+                                        'Authorization': f'Bearer {dropbox_token}',
+                                        'Content-Type': 'application/json'
+                                    }
+                                    if dropbox_team_member_id:
+                                        delete_headers['Dropbox-API-Select-User'] = dropbox_team_member_id
+                                    if namespace_id:
+                                        delete_headers['Dropbox-API-Path-Root'] = json.dumps({'.tag': 'namespace_id', 'namespace_id': namespace_id})
+                                    
+                                    delete_response = requests.post(
+                                        'https://api.dropboxapi.com/2/files/delete_v2',
+                                        headers=delete_headers,
+                                        json={'path': dropbox_path}
+                                    )
+                                    
+                                    if delete_response.status_code == 200:
+                                        print(f"✅ Deleted from Dropbox: {filename}")
+                                    else:
+                                        print(f"⚠️  Could not delete: {delete_response.text[:100]}")
+                                except Exception as e:
+                                    print(f"⚠️  Error deleting from Dropbox: {e}")
+                            
+                            elif info.get('status') == 'failed':
+                                # FAILED - Keep in Dropbox
+                                with bulk_import_lock:
+                                    if not any(f.get('name') == filename for f in bulk_import_state['failed_files']):
+                                        bulk_import_state['failed_files'].append({
+                                            'name': filename,
+                                            'error': info.get('step', 'Processing failed')
+                                        })
+                                    bulk_import_state['last_update'] = time.time()
+                                print(f"❌ Failed (kept in Dropbox): {filename}")
+            
+            # Also check for tracks no longer in queue (processed successfully)
+            with dropbox_paths_lock:
+                for filename, dropbox_path in list(dropbox_paths.items()):
+                    if filename not in completed_tracks:
+                        with queue_items_lock:
+                            if filename not in queue_items:
+                                # Track finished and was removed from queue = success
+                                completed_tracks.add(filename)
+                                with bulk_import_lock:
+                                    bulk_import_state['processed'] += 1
+                                    bulk_import_state['completed_files'].append(filename)
+                                    bulk_import_state['last_update'] = time.time()
+                                
+                                try:
+                                    print(f"🗑️  Deleting from Dropbox: {filename}")
+                                    delete_headers = {
+                                        'Authorization': f'Bearer {dropbox_token}',
+                                        'Content-Type': 'application/json'
+                                    }
+                                    if dropbox_team_member_id:
+                                        delete_headers['Dropbox-API-Select-User'] = dropbox_team_member_id
+                                    if namespace_id:
+                                        delete_headers['Dropbox-API-Path-Root'] = json.dumps({'.tag': 'namespace_id', 'namespace_id': namespace_id})
+                                    
+                                    delete_response = requests.post(
+                                        'https://api.dropboxapi.com/2/files/delete_v2',
+                                        headers=delete_headers,
+                                        json={'path': dropbox_path}
+                                    )
+                                    
+                                    if delete_response.status_code == 200:
+                                        print(f"✅ Deleted from Dropbox: {filename}")
+                                except Exception as e:
+                                    print(f"⚠️  Error deleting from Dropbox: {e}")
+            
+            # Update status display
+            with bulk_import_lock:
+                in_progress = len(downloaded_files) - len(completed_tracks)
+                bulk_import_state['current_file'] = f'⚙️ {in_progress} processing, ✅ {bulk_import_state["processed"]} done'
+            
+            # Check if all done
+            if len(completed_tracks) >= len(downloaded_files):
+                print(f"🎉 All {len(downloaded_files)} tracks processed!")
+                break
+        
+        # Complete
+        with bulk_import_lock:
+            bulk_import_state['current_status'] = 'complete'
+            bulk_import_state['active'] = False
+            bulk_import_state['current_file'] = ''
+            bulk_import_state['last_update'] = time.time()
+        
+        print(f"\n{'='*60}")
+        print(f"🎉 BULK IMPORT COMPLETE!")
+        print(f"   Total found: {bulk_import_state['total_found']}")
+        print(f"   Skipped (banned keywords): {bulk_import_state['skipped']}")
+        print(f"   Downloaded: {len(downloaded_files)}")
+        print(f"   Processed: {bulk_import_state['processed']}")
+        print(f"   Failed: {bulk_import_state['failed']}")
+        print(f"{'='*60}")
+        
+    except Exception as e:
+        import traceback
+        print(f"❌ Bulk import error: {str(e)}")
+        print(traceback.format_exc())
+        with bulk_import_lock:
+            bulk_import_state['error'] = str(e)
+            bulk_import_state['current_status'] = 'error'
+            bulk_import_state['active'] = False
+            bulk_import_state['last_update'] = time.time()
+
+
 @app.route('/dropbox/import', methods=['POST'])
 def dropbox_import_files():
     """
@@ -4098,6 +5218,7 @@ def dropbox_import_files():
     
     # Re-read token from environment
     dropbox_token = os.environ.get('DROPBOX_ACCESS_TOKEN', '') or DROPBOX_ACCESS_TOKEN
+    dropbox_team_member_id = os.environ.get('DROPBOX_TEAM_MEMBER_ID', '') or DROPBOX_TEAM_MEMBER_ID
     
     if not dropbox_token:
         return jsonify({'error': 'Dropbox not configured. Set DROPBOX_ACCESS_TOKEN in .env'}), 400
@@ -4122,6 +5243,33 @@ def dropbox_import_files():
             'Authorization': f'Bearer {dropbox_token}',
             'Content-Type': 'application/json'
         }
+        
+        # Add team member header for Dropbox Business team tokens
+        if dropbox_team_member_id:
+            headers['Dropbox-API-Select-User'] = dropbox_team_member_id
+        
+        # AUTO-DETECT root namespace for team accounts
+        # This is crucial for accessing content inside team folders
+        if dropbox_team_member_id:
+            try:
+                # Note: get_current_account requires no JSON body
+                account_headers = {
+                    'Authorization': f'Bearer {dropbox_token}',
+                    'Dropbox-API-Select-User': dropbox_team_member_id
+                }
+                account_response = requests.post(
+                    'https://api.dropboxapi.com/2/users/get_current_account',
+                    headers=account_headers
+                )
+                if account_response.status_code == 200:
+                    account_data = account_response.json()
+                    root_info = account_data.get('root_info', {})
+                    root_ns = root_info.get('root_namespace_id')
+                    if root_ns:
+                        headers['Dropbox-API-Path-Root'] = json.dumps({'.tag': 'namespace_id', 'namespace_id': root_ns})
+                        print(f"📦 Import: Using root namespace: {root_ns}")
+            except Exception as e:
+                print(f"⚠️ Could not auto-detect namespace for import: {e}")
         
         files_to_import = []
         
@@ -4199,10 +5347,30 @@ def dropbox_import_files():
                 'folder_path': folder_path
             }
         
+        # Get root namespace for downloads (needed for team folders)
+        root_namespace_id = ''
+        if dropbox_team_member_id:
+            try:
+                # Note: get_current_account requires no JSON body
+                account_headers = {
+                    'Authorization': f'Bearer {dropbox_token}',
+                    'Dropbox-API-Select-User': dropbox_team_member_id
+                }
+                account_response = requests.post(
+                    'https://api.dropboxapi.com/2/users/get_current_account',
+                    headers=account_headers
+                )
+                if account_response.status_code == 200:
+                    account_data = account_response.json()
+                    root_info = account_data.get('root_info', {})
+                    root_namespace_id = root_info.get('root_namespace_id', '')
+            except:
+                pass
+        
         # Start background thread to download and process files
         thread = threading.Thread(
             target=dropbox_download_and_process_thread,
-            args=(import_id, files_to_import, session_id, dropbox_token)
+            args=(import_id, files_to_import, session_id, dropbox_token, dropbox_team_member_id, root_namespace_id)
         )
         thread.daemon = True
         thread.start()
@@ -4218,13 +5386,19 @@ def dropbox_import_files():
         return jsonify({'error': f'Error starting import: {str(e)}'}), 500
 
 
-def dropbox_download_and_process_thread(import_id, files_to_import, session_id, dropbox_token):
+def dropbox_download_and_process_thread(import_id, files_to_import, session_id, dropbox_token, dropbox_team_member_id='', root_namespace_id=''):
     """
     Background thread to download files from Dropbox and enqueue for processing.
     """
     headers = {
         'Authorization': f'Bearer {dropbox_token}',
     }
+    
+    # Add team member header for Dropbox Business team tokens
+    if dropbox_team_member_id:
+        headers['Dropbox-API-Select-User'] = dropbox_team_member_id
+    
+    print(f"📦 Download thread started with namespace: {root_namespace_id}")
     
     # Create session-specific upload folder
     session_upload_folder = os.path.join(UPLOAD_FOLDER, session_id)
@@ -4243,12 +5417,20 @@ def dropbox_download_and_process_thread(import_id, files_to_import, session_id, 
                     dropbox_imports[import_id]['files'][file_name]['status'] = 'downloading'
             
             # Download file from Dropbox
+            download_headers = {
+                'Authorization': f'Bearer {dropbox_token}',
+                'Dropbox-API-Arg': json.dumps({'path': file_path})
+            }
+            if dropbox_team_member_id:
+                download_headers['Dropbox-API-Select-User'] = dropbox_team_member_id
+            
+            # Add namespace header if available (passed from the import thread)
+            if root_namespace_id:
+                download_headers['Dropbox-API-Path-Root'] = json.dumps({'.tag': 'namespace_id', 'namespace_id': root_namespace_id})
+            
             download_response = requests.post(
                 'https://content.dropboxapi.com/2/files/download',
-                headers={
-                    'Authorization': f'Bearer {dropbox_token}',
-                    'Dropbox-API-Arg': json.dumps({'path': file_path})
-                },
+                headers=download_headers,
                 stream=True
             )
             
@@ -4400,6 +5582,7 @@ def dropbox_get_namespaces():
     """
     load_dotenv(override=True)
     dropbox_token = os.environ.get('DROPBOX_ACCESS_TOKEN', '') or DROPBOX_ACCESS_TOKEN
+    dropbox_team_member_id = os.environ.get('DROPBOX_TEAM_MEMBER_ID', '') or DROPBOX_TEAM_MEMBER_ID
     
     if not dropbox_token:
         return jsonify({'error': 'Dropbox not configured'}), 400
@@ -4411,11 +5594,24 @@ def dropbox_get_namespaces():
             'Content-Type': 'application/json'
         }
         
-        # First get current account
+        # Add team member header for Dropbox Business team tokens
+        if dropbox_team_member_id:
+            headers['Dropbox-API-Select-User'] = dropbox_team_member_id
+            print(f"📦 Using team member ID: {dropbox_team_member_id[:20]}...")
+        
+        # First get current account (no JSON body needed for this endpoint)
+        account_headers = {
+            'Authorization': f'Bearer {dropbox_token}'
+        }
+        if dropbox_team_member_id:
+            account_headers['Dropbox-API-Select-User'] = dropbox_team_member_id
+        
         account_response = requests.post(
             'https://api.dropboxapi.com/2/users/get_current_account',
-            headers=headers
+            headers=account_headers
         )
+        
+        print(f"📦 Account response status: {account_response.status_code}")
         
         namespaces = []
         account_info = {}
@@ -4430,27 +5626,37 @@ def dropbox_get_namespaces():
             
             # Get root namespace info
             root_info = account_data.get('root_info', {})
+            print(f"📦 Root info from Dropbox: {root_info}")
+            
             if root_info:
                 # Home namespace (personal files)
                 home_ns = root_info.get('home_namespace_id')
-                if home_ns:
+                # Root namespace (team root for team accounts)
+                root_ns = root_info.get('root_namespace_id')
+                
+                print(f"📦 Home namespace: {home_ns}, Root namespace: {root_ns}")
+                
+                # For team accounts, the root_namespace_id is what you need to access team folders
+                # Always add the root namespace first (it's needed for team folder contents)
+                if root_ns:
+                    namespaces.append({
+                        'id': root_ns,
+                        'name': 'Team Root' if root_ns != home_ns else 'Root',
+                        'type': 'team_root' if root_ns != home_ns else 'root'
+                    })
+                
+                # Add home namespace separately if different from root
+                if home_ns and home_ns != root_ns:
                     namespaces.append({
                         'id': home_ns,
                         'name': 'Home (Personal Files)',
                         'type': 'home'
                     })
-                
-                # Root namespace (might be team root)
-                root_ns = root_info.get('root_namespace_id')
-                if root_ns and root_ns != home_ns:
-                    namespaces.append({
-                        'id': root_ns,
-                        'name': 'Team Root',
-                        'type': 'team_root'
-                    })
             
             print(f"📦 Account: {account_info}")
             print(f"📦 Namespaces found: {namespaces}")
+        else:
+            print(f"❌ Account response error: {account_response.text[:500] if account_response.text else 'empty'}")
         
         # Try to list shared folders (team folders appear here)
         shared_response = requests.post(
