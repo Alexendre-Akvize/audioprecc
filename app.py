@@ -513,15 +513,16 @@ FORMAT_MAPPINGS = {
     'quickhit': 'Short',
     'quick-hit': 'Short',
     'cut': 'Short',
+    'snip': 'Short',
     'acapella intro': 'Acap In',
     'acap intro': 'Acap In',
     'acapella outro': 'Acap Out',
     'acap outro': 'Acap Out',
     'acapella in': 'Acap In',
     'acapella out': 'Acap Out',
-    'dirty intro': 'Intro',
-    'clean intro': 'Intro',
-    'hype intro': 'Intro',
+    'a cappella': 'Acapella',
+    'a capella': 'Acapella',
+    'acappella': 'Acapella',
 }
 
 # Track types/versions to generate
@@ -548,10 +549,15 @@ def should_skip_track(title):
 def clean_track_title(title):
     """
     Clean track title:
-    1. Replace DJ/pool names with "ID By Rivoli"
-    2. Standardize formats (Quick Hit -> Short, etc.)
-    3. Clean up parentheses
-    4. Ensure "ID By Rivoli" is in parentheses
+    1. Remove artist name (everything before " - ")
+    2. Remove BPM numbers at the end
+    3. Replace DJ/pool names with "ID By Rivoli"
+    4. Standardize formats (Quick Hit -> Short, etc.)
+    5. Add "ID By Rivoli" in format parentheses
+    6. Clean up parentheses
+    
+    Example: "Afro B & Slim Jxmmi - Fine Wine & Hennessy (Intro) 102"
+          -> "Fine Wine & Hennessy (ID By Rivoli Intro)"
     
     Returns cleaned title string.
     """
@@ -560,18 +566,59 @@ def clean_track_title(title):
     
     cleaned = title
     
-    # Replace DJ/pool names with "ID By Rivoli" (case-insensitive)
+    # 1. Remove artist name (everything before " - ")
+    if ' - ' in cleaned:
+        parts = cleaned.split(' - ', 1)
+        if len(parts) > 1:
+            cleaned = parts[1]  # Keep only the track title part
+    
+    # 2. Remove BPM numbers at the end (standalone numbers like "102", "128", etc.)
+    # Match: space + 2-3 digit number at end, or space + number + space before parenthesis
+    cleaned = re.sub(r'\s+\d{2,3}\s*$', '', cleaned)  # "Title 102" -> "Title"
+    cleaned = re.sub(r'\s+\d{2,3}\s+(\([^)]+\))\s*$', r' \1', cleaned)  # "Title 102 (Intro)" -> "Title (Intro)"
+    
+    # 3. Replace DJ/pool names with "ID By Rivoli" (case-insensitive)
     for dj_name in DJ_NAMES_TO_REPLACE:
         # Create case-insensitive pattern
         pattern = re.compile(re.escape(dj_name), re.IGNORECASE)
         cleaned = pattern.sub('ID By Rivoli', cleaned)
     
-    # Apply format mappings (case-insensitive)
+    # 4. Apply format mappings (case-insensitive)
     for old_format, new_format in FORMAT_MAPPINGS.items():
         pattern = re.compile(re.escape(old_format), re.IGNORECASE)
         cleaned = pattern.sub(new_format, cleaned)
     
-    # Clean up double spaces
+    # 5. Add "ID By Rivoli" to format parentheses that don't have it
+    # Patterns like (Intro), (Outro), (Short), (Acap In), etc.
+    format_keywords = [
+        'Intro', 'Outro', 'Short', 'Acap In', 'Acap Out', 
+        'Acapella', 'Instrumental', 'Extended', 'Main', 
+        'Verse', 'Hook', 'Chorus', 'Break', 'Drop'
+    ]
+    
+    for keyword in format_keywords:
+        # Match (keyword) without "ID By Rivoli" already in it
+        # Pattern: (keyword) or (Dirty keyword) or (Clean keyword)
+        pattern = re.compile(
+            r'\(\s*(?!ID By Rivoli)(' + re.escape(keyword) + r')\s*\)',
+            re.IGNORECASE
+        )
+        cleaned = pattern.sub(r'(ID By Rivoli \1)', cleaned)
+        
+        # Also handle (Dirty Intro) -> (ID By Rivoli Intro) (Dirty)
+        pattern_dirty = re.compile(
+            r'\(\s*(?!ID By Rivoli)(Dirty)\s+(' + re.escape(keyword) + r')\s*\)',
+            re.IGNORECASE
+        )
+        cleaned = pattern_dirty.sub(r'(ID By Rivoli \2) (Dirty)', cleaned)
+        
+        pattern_clean = re.compile(
+            r'\(\s*(?!ID By Rivoli)(Clean)\s+(' + re.escape(keyword) + r')\s*\)',
+            re.IGNORECASE
+        )
+        cleaned = pattern_clean.sub(r'(ID By Rivoli \2) (Clean)', cleaned)
+    
+    # 6. Clean up double spaces
     cleaned = re.sub(r'\s+', ' ', cleaned)
     
     # Clean up empty parentheses

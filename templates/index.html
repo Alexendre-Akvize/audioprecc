@@ -1836,6 +1836,29 @@
         </div>
     </div>
 
+                <!-- Current Processing Display -->
+                <div class="card" id="currentProcessingCard" style="display: none; border: 1px solid var(--accent); background: rgba(168, 255, 120, 0.05);">
+                    <div class="card-header" style="background: rgba(168, 255, 120, 0.1);">
+                        <div class="card-title" style="color: var(--accent);">
+                            <i data-lucide="loader-2" class="spin"></i>
+                            Now Processing
+                        </div>
+                    </div>
+                    <div class="card-body" style="padding: 16px;">
+                        <div id="currentProcessingInfo">
+                            <div style="font-size: 1.1em; font-weight: 600; margin-bottom: 8px; color: var(--text);" id="currentTrackName">-</div>
+                            <div style="font-size: 0.9em; color: var(--text-secondary); margin-bottom: 12px;" id="currentTrackStep">Waiting...</div>
+                            <div style="height: 6px; background: var(--bg-tertiary); border-radius: 3px; overflow: hidden;">
+                                <div id="currentTrackProgress" style="height: 100%; background: var(--accent); width: 0%; transition: width 0.3s ease;"></div>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin-top: 8px; font-size: 0.8em; color: var(--text-secondary);">
+                                <span id="currentTrackWorker">Worker -</span>
+                                <span id="currentTrackPercent">0%</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Full Track List -->
                 <div class="card">
                     <div class="card-header">
@@ -2563,6 +2586,72 @@
             }
         }
         
+        function updateCurrentProcessingCard(queueItems) {
+            const card = document.getElementById('currentProcessingCard');
+            const trackName = document.getElementById('currentTrackName');
+            const trackStep = document.getElementById('currentTrackStep');
+            const trackProgress = document.getElementById('currentTrackProgress');
+            const trackWorker = document.getElementById('currentTrackWorker');
+            const trackPercent = document.getElementById('currentTrackPercent');
+            
+            // Find the currently processing item(s)
+            const processingItems = queueItems.filter(item => item.status === 'processing');
+            
+            if (processingItems.length === 0) {
+                card.style.display = 'none';
+                return;
+            }
+            
+            // Show card
+            if (card.style.display === 'none') {
+                card.style.display = 'block';
+                lucide.createIcons();
+            }
+            
+            // Show the first processing item prominently
+            const current = processingItems[0];
+            trackName.textContent = current.filename || 'Unknown';
+            trackStep.textContent = current.step || 'Processing...';
+            trackProgress.style.width = `${current.progress || 0}%`;
+            trackWorker.textContent = current.worker ? `Worker ${current.worker}` : 'Worker -';
+            trackPercent.textContent = `${current.progress || 0}%`;
+            
+            // If multiple items are processing, show count
+            if (processingItems.length > 1) {
+                trackStep.textContent = `${current.step || 'Processing...'} (+${processingItems.length - 1} more)`;
+                
+                // Show all processing items
+                const allProcessing = processingItems.map(item => 
+                    `<div style="display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid var(--bg-tertiary); font-size: 0.85em;">
+                        <span style="color: var(--text);">${item.filename || 'Unknown'}</span>
+                        <span style="color: var(--text-secondary);">W${item.worker || '-'} ${item.progress || 0}%</span>
+                    </div>`
+                ).join('');
+                
+                document.getElementById('currentProcessingInfo').innerHTML = `
+                    <div style="font-size: 1em; font-weight: 600; margin-bottom: 8px; color: var(--accent);">
+                        🎵 ${processingItems.length} tracks processing
+                    </div>
+                    <div style="max-height: 200px; overflow-y: auto;">
+                        ${allProcessing}
+                    </div>
+                `;
+            } else {
+                // Single item - restore original layout
+                document.getElementById('currentProcessingInfo').innerHTML = `
+                    <div style="font-size: 1.1em; font-weight: 600; margin-bottom: 8px; color: var(--text);" id="currentTrackName">${current.filename || 'Unknown'}</div>
+                    <div style="font-size: 0.9em; color: var(--text-secondary); margin-bottom: 12px;" id="currentTrackStep">${current.step || 'Processing...'}</div>
+                    <div style="height: 6px; background: var(--bg-tertiary); border-radius: 3px; overflow: hidden;">
+                        <div id="currentTrackProgress" style="height: 100%; background: var(--accent); width: ${current.progress || 0}%; transition: width 0.3s ease;"></div>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-top: 8px; font-size: 0.8em; color: var(--text-secondary);">
+                        <span id="currentTrackWorker">Worker ${current.worker || '-'}</span>
+                        <span id="currentTrackPercent">${current.progress || 0}%</span>
+                    </div>
+                `;
+            }
+        }
+        
         function updateTimeEstimation(queueItems, completedTracks, activeWorkers) {
             const timeEstimationEl = document.getElementById('timeEstimation');
             const etaValueEl = document.getElementById('etaValue');
@@ -2698,6 +2787,9 @@
                     
                     // Sync full track list with server queue items (including failed files)
                     syncTracksFromQueueItems(status.queue_items || [], completedTracks, failedFiles);
+                    
+                    // Update "Now Processing" card
+                    updateCurrentProcessingCard(status.queue_items || []);
                     
                     // Update time estimation
                     updateTimeEstimation(status.queue_items || [], completedTracks, activeWorkers);
