@@ -75,15 +75,127 @@ MAX_PENDING_TRACKS = int(os.environ.get('MAX_PENDING_TRACKS', 1500))
 PENDING_WARNING_THRESHOLD = int(os.environ.get('PENDING_WARNING_THRESHOLD', 1000))
 
 # =============================================================================
-# DROPBOX INTEGRATION
+# DROPBOX INTEGRATION WITH AUTO-REFRESH
 # =============================================================================
-# Set DROPBOX_ACCESS_TOKEN in your .env file
-# Get your token from: https://www.dropbox.com/developers/apps
+# Set these in your .env file:
+# - DROPBOX_ACCESS_TOKEN: Short-lived access token (auto-refreshed)
+# - DROPBOX_REFRESH_TOKEN: Long-lived refresh token (get from OAuth flow)
+# - DROPBOX_APP_KEY: Your Dropbox app key
+# - DROPBOX_APP_SECRET: Your Dropbox app secret
+# Get your tokens from: https://www.dropbox.com/developers/apps
 # For Dropbox Business team tokens, also set DROPBOX_TEAM_MEMBER_ID
+
 DROPBOX_ACCESS_TOKEN = os.environ.get('DROPBOX_ACCESS_TOKEN', '')
+DROPBOX_REFRESH_TOKEN = os.environ.get('DROPBOX_REFRESH_TOKEN', '')
+DROPBOX_APP_KEY = os.environ.get('DROPBOX_APP_KEY', '')
+DROPBOX_APP_SECRET = os.environ.get('DROPBOX_APP_SECRET', '')
 DROPBOX_TEAM_MEMBER_ID = os.environ.get('DROPBOX_TEAM_MEMBER_ID', '')
 DROPBOX_FOLDER = os.path.join(BASE_DIR, 'dropbox_downloads')
 os.makedirs(DROPBOX_FOLDER, exist_ok=True)
+
+# Token management
+dropbox_token_lock = Lock()
+dropbox_current_token = DROPBOX_ACCESS_TOKEN
+dropbox_token_expires_at = 0  # Unix timestamp when token expires
+
+def get_valid_dropbox_token():
+    """
+    Get a valid Dropbox access token, refreshing if necessary.
+    Returns the current access token or refreshes it using the refresh token.
+    """
+    global dropbox_current_token, dropbox_token_expires_at
+    
+    with dropbox_token_lock:
+        current_time = time.time()
+        
+        # If token is still valid (with 5 min buffer), return it
+        if dropbox_current_token and dropbox_token_expires_at > current_time + 300:
+            return dropbox_current_token
+        
+        # Try to refresh the token
+        refresh_token = os.environ.get('DROPBOX_REFRESH_TOKEN', '') or DROPBOX_REFRESH_TOKEN
+        app_key = os.environ.get('DROPBOX_APP_KEY', '') or DROPBOX_APP_KEY
+        app_secret = os.environ.get('DROPBOX_APP_SECRET', '') or DROPBOX_APP_SECRET
+        
+        if refresh_token and app_key and app_secret:
+            try:
+                print("🔄 Refreshing Dropbox access token...")
+                response = requests.post(
+                    'https://api.dropbox.com/oauth2/token',
+                    data={
+                        'grant_type': 'refresh_token',
+                        'refresh_token': refresh_token,
+                    },
+                    auth=(app_key, app_secret)
+                )
+                
+                if response.status_code == 200:
+                    token_data = response.json()
+                    dropbox_current_token = token_data.get('access_token', '')
+                    expires_in = token_data.get('expires_in', 14400)  # Default 4 hours
+                    dropbox_token_expires_at = current_time + expires_in
+                    
+                    # Update environment variable for this session
+                    os.environ['DROPBOX_ACCESS_TOKEN'] = dropbox_current_token
+                    
+                    print(f"✅ Dropbox token refreshed! Expires in {expires_in // 3600}h {(expires_in % 3600) // 60}m")
+                    return dropbox_current_token
+                else:
+                    print(f"❌ Token refresh failed: {response.status_code} - {response.text[:200]}")
+            except Exception as e:
+                print(f"❌ Token refresh error: {e}")
+        
+        # Fallback to current token (might be expired)
+        current_token = os.environ.get('DROPBOX_ACCESS_TOKEN', '') or DROPBOX_ACCESS_TOKEN
+        if current_token:
+            dropbox_current_token = current_token
+            return dropbox_current_token
+        
+        return ''
+
+def is_token_expired_error(response):
+    """Check if a Dropbox API response indicates an expired token."""
+    if response.status_code == 401:
+        return True
+    if response.status_code == 400:
+        try:
+            error_data = response.json()
+            error_summary = error_data.get('error_summary', '').lower()
+            if 'expired' in error_summary or 'invalid_access_token' in error_summary:
+                return True
+        except:
+            pass
+    return False
+
+def dropbox_api_request(method, url, **kwargs):
+    """
+    Make a Dropbox API request with automatic token refresh on expiration.
+    """
+    # Get current valid token
+    token = get_valid_dropbox_token()
+    if not token:
+        raise Exception("No Dropbox token available")
+    
+    # Update Authorization header
+    headers = kwargs.get('headers', {})
+    headers['Authorization'] = f'Bearer {token}'
+    kwargs['headers'] = headers
+    
+    # Make the request
+    response = requests.request(method, url, **kwargs)
+    
+    # If token expired, refresh and retry once
+    if is_token_expired_error(response):
+        print("⚠️ Token expired, refreshing...")
+        global dropbox_token_expires_at
+        dropbox_token_expires_at = 0  # Force refresh
+        
+        token = get_valid_dropbox_token()
+        if token:
+            headers['Authorization'] = f'Bearer {token}'
+            response = requests.request(method, url, **kwargs)
+    
+    return response
 
 # Dropbox import tracking
 dropbox_imports = {}  # { import_id: { status, total, downloaded, processed, files, errors } }
@@ -4375,14 +4487,14 @@ def dropbox_list_files():
     # Reload .env in case token was added after startup
     load_dotenv(override=True)
     
-    # Re-read token from environment
-    dropbox_token = os.environ.get('DROPBOX_ACCESS_TOKEN', '') or DROPBOX_ACCESS_TOKEN
+    # Get valid token (auto-refreshes if expired)
+    dropbox_token = get_valid_dropbox_token()
     dropbox_team_member_id = os.environ.get('DROPBOX_TEAM_MEMBER_ID', '') or DROPBOX_TEAM_MEMBER_ID
     
     print(f"📦 Dropbox list request - Token configured: {bool(dropbox_token)}, Token length: {len(dropbox_token) if dropbox_token else 0}, Team member ID: {bool(dropbox_team_member_id)}")
     
     if not dropbox_token:
-        return jsonify({'error': 'Dropbox not configured. Set DROPBOX_ACCESS_TOKEN in .env'}), 400
+        return jsonify({'error': 'Dropbox not configured. Set DROPBOX_ACCESS_TOKEN and DROPBOX_REFRESH_TOKEN in .env'}), 400
     
     data = request.json or {}
     folder_path = data.get('folder_path', '').strip()
@@ -4548,7 +4660,8 @@ def dropbox_scan_all_files():
     
     load_dotenv(override=True)
     
-    dropbox_token = os.environ.get('DROPBOX_ACCESS_TOKEN', '') or DROPBOX_ACCESS_TOKEN
+    # Get valid token (auto-refreshes if expired)
+    dropbox_token = get_valid_dropbox_token()
     dropbox_team_member_id = os.environ.get('DROPBOX_TEAM_MEMBER_ID', '') or DROPBOX_TEAM_MEMBER_ID
     
     folder_path = request.args.get('folder_path', '').strip()
@@ -4710,11 +4823,12 @@ def start_bulk_import():
     
     load_dotenv(override=True)
     
-    dropbox_token = os.environ.get('DROPBOX_ACCESS_TOKEN', '') or DROPBOX_ACCESS_TOKEN
+    # Get valid token (auto-refreshes if expired)
+    dropbox_token = get_valid_dropbox_token()
     dropbox_team_member_id = os.environ.get('DROPBOX_TEAM_MEMBER_ID', '') or DROPBOX_TEAM_MEMBER_ID
     
     if not dropbox_token:
-        return jsonify({'error': 'Dropbox not configured'}), 400
+        return jsonify({'error': 'Dropbox not configured. Set DROPBOX_REFRESH_TOKEN in .env'}), 400
     
     data = request.json or {}
     folder_path = data.get('folder_path', '').strip()
@@ -5282,12 +5396,12 @@ def dropbox_import_files():
     # Reload .env in case token was added after startup
     load_dotenv(override=True)
     
-    # Re-read token from environment
-    dropbox_token = os.environ.get('DROPBOX_ACCESS_TOKEN', '') or DROPBOX_ACCESS_TOKEN
+    # Get valid token (auto-refreshes if expired)
+    dropbox_token = get_valid_dropbox_token()
     dropbox_team_member_id = os.environ.get('DROPBOX_TEAM_MEMBER_ID', '') or DROPBOX_TEAM_MEMBER_ID
     
     if not dropbox_token:
-        return jsonify({'error': 'Dropbox not configured. Set DROPBOX_ACCESS_TOKEN in .env'}), 400
+        return jsonify({'error': 'Dropbox not configured. Set DROPBOX_REFRESH_TOKEN in .env'}), 400
     
     session_id = get_session_id()
     data = request.json or {}
@@ -5677,8 +5791,8 @@ def dropbox_all_imports_status():
             if v.get('session_id') == session_id
         }
     
-    # Re-read token to check if configured
-    dropbox_token = os.environ.get('DROPBOX_ACCESS_TOKEN', '') or DROPBOX_ACCESS_TOKEN
+    # Check if token is available
+    dropbox_token = get_valid_dropbox_token()
     
     return jsonify({
         'imports': session_imports,
@@ -5692,12 +5806,12 @@ def dropbox_configured():
     # Reload .env in case token was added after startup
     load_dotenv(override=True)
     
-    # Re-read token from environment
-    dropbox_token = os.environ.get('DROPBOX_ACCESS_TOKEN', '') or DROPBOX_ACCESS_TOKEN
+    # Get valid token (auto-refreshes if expired)
+    dropbox_token = get_valid_dropbox_token()
     
     return jsonify({
         'configured': bool(dropbox_token),
-        'message': 'Dropbox is configured' if dropbox_token else 'Set DROPBOX_ACCESS_TOKEN in .env'
+        'message': 'Dropbox is configured' if dropbox_token else 'Set DROPBOX_REFRESH_TOKEN, DROPBOX_APP_KEY, DROPBOX_APP_SECRET in .env'
     })
 
 
@@ -5708,7 +5822,9 @@ def dropbox_get_namespaces():
     This helps find team folders that require a specific namespace_id.
     """
     load_dotenv(override=True)
-    dropbox_token = os.environ.get('DROPBOX_ACCESS_TOKEN', '') or DROPBOX_ACCESS_TOKEN
+    
+    # Get valid token (auto-refreshes if expired)
+    dropbox_token = get_valid_dropbox_token()
     dropbox_team_member_id = os.environ.get('DROPBOX_TEAM_MEMBER_ID', '') or DROPBOX_TEAM_MEMBER_ID
     
     if not dropbox_token:
