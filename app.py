@@ -5084,7 +5084,7 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                 
                 with bulk_import_lock:
                     bulk_import_state['total_scanned'] += len(result.get('entries', []))
-                    bulk_import_state['total_found'] += len(all_files)
+                    bulk_import_state['total_found'] = len(all_files)  # Assignment, not increment!
                     bulk_import_state['files_queue'] = all_files.copy()
                     bulk_import_state['last_update'] = time.time()
                 
