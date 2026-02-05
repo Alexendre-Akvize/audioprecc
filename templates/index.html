@@ -4497,7 +4497,9 @@
                 
                 // Update text
                 if (data.status === 'scanning') {
-                    progressText.textContent = `Found ${data.total_found} audio files...`;
+                    // Use scanning_found during active scan (doesn't reset between pagination batches)
+                    const scanningCount = data.scanning_found || 0;
+                    progressText.textContent = `Scanning... Found ${scanningCount} audio files so far`;
                 } else {
                     progressText.textContent = `${processed} / ${total} files processed`;
                 }

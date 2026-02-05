@@ -211,6 +211,7 @@ bulk_import_state = {
     'namespace_id': '',
     'started_at': None,
     'total_found': 0,
+    'scanning_found': 0,  # Progress during active scan (separate from total_found)
     'total_scanned': 0,
     'downloaded': 0,
     'processed': 0,
@@ -4848,6 +4849,7 @@ def start_bulk_import():
             'namespace_id': '',
             'started_at': time.time(),
             'total_found': 0,
+            'scanning_found': 0,
             'total_scanned': 0,
             'downloaded': 0,
             'processed': 0,
@@ -4894,6 +4896,7 @@ def get_bulk_import_status():
             'status': bulk_import_state['current_status'],
             'folder_path': bulk_import_state['folder_path'],
             'total_found': bulk_import_state['total_found'],
+            'scanning_found': bulk_import_state.get('scanning_found', 0),
             'downloaded': bulk_import_state['downloaded'],
             'processed': bulk_import_state['processed'],
             'failed': bulk_import_state['failed'],
@@ -5084,12 +5087,18 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                 
                 with bulk_import_lock:
                     bulk_import_state['total_scanned'] += len(result.get('entries', []))
-                    bulk_import_state['total_found'] = len(all_files)  # Assignment, not increment!
+                    bulk_import_state['scanning_found'] = len(all_files)  # Progress during scan (separate from total_found)
                     bulk_import_state['files_queue'] = all_files.copy()
                     bulk_import_state['last_update'] = time.time()
                 
                 has_more = result.get('has_more', False)
                 cursor = result.get('cursor')
+            
+            # Update total_found AFTER scan completes (not during pagination)
+            with bulk_import_lock:
+                bulk_import_state['total_found'] = len(all_files)
+                bulk_import_state['scanning_found'] = 0  # Reset scanning progress
+                bulk_import_state['last_update'] = time.time()
             
             print(f"📦 Scan complete: {len(all_files)} audio files found")
             
