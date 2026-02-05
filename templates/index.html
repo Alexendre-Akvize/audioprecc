@@ -4492,16 +4492,23 @@
                 const downloaded = data.downloaded || 0;
                 const failed = data.failed || 0;
                 const skipped = data.skipped || 0;
-                const percent = total > 0 ? Math.round((processed / total) * 100) : 0;
+                const scanningFound = data.scanning_found || 0;
+                // Use total_found for progress (stable), or scanning_found during first scan
+                const effectiveTotal = total > 0 ? total : scanningFound;
+                const percent = effectiveTotal > 0 ? Math.round((processed / effectiveTotal) * 100) : 0;
                 progressBar.style.width = `${percent}%`;
                 
                 // Update text
                 if (data.status === 'scanning') {
-                    // Use scanning_found during active scan (doesn't reset between pagination batches)
-                    const scanningCount = data.scanning_found || 0;
-                    progressText.textContent = `Scanning... Found ${scanningCount} audio files so far`;
+                    if (total > 0) {
+                        // Rescan: we already processed files before, show stable info
+                        progressText.textContent = `🔍 Rescanning for new files... (${processed} processed so far)`;
+                    } else {
+                        // First scan: show growing count
+                        progressText.textContent = `🔍 Scanning... Found ${scanningFound} audio files`;
+                    }
                 } else {
-                    progressText.textContent = `${processed} / ${total} files processed`;
+                    progressText.textContent = `${processed} / ${effectiveTotal} files processed`;
                 }
                 
                 // Current file
@@ -4570,7 +4577,7 @@
                 document.getElementById('dropboxQueue').textContent = queueSize;
                 document.getElementById('dropboxProcessed').textContent = processed;
                 document.getElementById('dropboxFailed').textContent = failed;
-                document.getElementById('dropboxImportCount').textContent = total;
+                document.getElementById('dropboxImportCount').textContent = effectiveTotal;
                 
                 // Current file in sidebar
                 const sidebarCurrentFile = document.getElementById('dropboxCurrentFile');

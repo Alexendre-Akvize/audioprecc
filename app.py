@@ -5085,19 +5085,19 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                                 'id': entry.get('id')
                             })
                 
+                # Only update scanning_found during pagination (total_found stays stable)
                 with bulk_import_lock:
                     bulk_import_state['total_scanned'] += len(result.get('entries', []))
-                    bulk_import_state['scanning_found'] = len(all_files)  # Progress during scan (separate from total_found)
+                    bulk_import_state['scanning_found'] = len(all_files)
                     bulk_import_state['files_queue'] = all_files.copy()
                     bulk_import_state['last_update'] = time.time()
                 
                 has_more = result.get('has_more', False)
                 cursor = result.get('cursor')
             
-            # Update total_found AFTER scan completes (not during pagination)
+            # Scan complete: update total_found (this is the stable number shown in the UI)
             with bulk_import_lock:
                 bulk_import_state['total_found'] = len(all_files)
-                bulk_import_state['scanning_found'] = 0  # Reset scanning progress
                 bulk_import_state['last_update'] = time.time()
             
             print(f"📦 Scan complete: {len(all_files)} audio files found")
