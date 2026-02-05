@@ -1828,6 +1828,73 @@
 
             <!-- Right Column: Sidebar -->
             <div class="sidebar">
+                <!-- Dropbox Import Card - Always visible when active -->
+                <div class="card" id="dropboxImportCard" style="display: none; border: 1px solid #6366f1; background: rgba(99, 102, 241, 0.05);">
+                    <div class="card-header" style="background: rgba(99, 102, 241, 0.1); cursor: pointer;" onclick="openDropboxModal()">
+                        <div class="card-title" style="color: #a5b4fc;">
+                            <i data-lucide="cloud-download"></i>
+                            Dropbox Import
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span class="queue-count" id="dropboxImportCount" style="background: #6366f1; color: white;">0</span>
+                            <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); stopBulkImport()" id="sidebarStopBtn" style="padding: 4px 8px;">
+                                <i data-lucide="square" style="width: 12px; height: 12px;"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body" style="padding: 16px;">
+                        <!-- Status -->
+                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+                            <div id="dropboxStatusDot" style="width: 8px; height: 8px; border-radius: 50%; background: #22c55e; animation: pulse 2s infinite;"></div>
+                            <span id="dropboxStatusLabel" style="font-size: 13px; color: var(--text-secondary);">Watching...</span>
+                        </div>
+                        
+                        <!-- Progress Bar -->
+                        <div style="height: 6px; background: var(--bg-tertiary); border-radius: 3px; overflow: hidden; margin-bottom: 8px;">
+                            <div id="dropboxProgressBarSidebar" style="height: 100%; background: linear-gradient(90deg, #6366f1, #8b5cf6); width: 0%; transition: width 0.3s ease;"></div>
+                        </div>
+                        
+                        <!-- Stats Grid -->
+                        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 12px;">
+                            <div style="text-align: center; padding: 8px; background: var(--bg-tertiary); border-radius: 6px;">
+                                <div style="font-size: 16px; font-weight: 600; color: #6366f1;" id="dropboxDownloaded">0</div>
+                                <div style="font-size: 10px; color: var(--text-muted);">⬇️ DL</div>
+                            </div>
+                            <div style="text-align: center; padding: 8px; background: var(--bg-tertiary); border-radius: 6px;">
+                                <div style="font-size: 16px; font-weight: 600; color: #f59e0b;" id="dropboxQueue">0</div>
+                                <div style="font-size: 10px; color: var(--text-muted);">⏳ Queue</div>
+                            </div>
+                            <div style="text-align: center; padding: 8px; background: var(--bg-tertiary); border-radius: 6px;">
+                                <div style="font-size: 16px; font-weight: 600; color: #22c55e;" id="dropboxProcessed">0</div>
+                                <div style="font-size: 10px; color: var(--text-muted);">✅ Done</div>
+                            </div>
+                            <div style="text-align: center; padding: 8px; background: var(--bg-tertiary); border-radius: 6px;">
+                                <div style="font-size: 16px; font-weight: 600; color: #ef4444;" id="dropboxFailed">0</div>
+                                <div style="font-size: 10px; color: var(--text-muted);">❌ Fail</div>
+                            </div>
+                        </div>
+                        
+                        <!-- Current File -->
+                        <div id="dropboxCurrentFile" style="margin-top: 12px; padding: 8px; background: var(--bg-tertiary); border-radius: 6px; font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                            Ready to import
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Quick Import Button (when no import running) -->
+                <div class="card" id="dropboxQuickCard" style="cursor: pointer;" onclick="openDropboxModal()">
+                    <div class="card-body" style="padding: 16px; display: flex; align-items: center; gap: 12px;">
+                        <div style="width: 40px; height: 40px; background: linear-gradient(135deg, #6366f1, #8b5cf6); border-radius: 10px; display: flex; align-items: center; justify-content: center;">
+                            <i data-lucide="cloud-download" style="color: white; width: 20px; height: 20px;"></i>
+                        </div>
+                        <div style="flex: 1;">
+                            <div style="font-size: 14px; font-weight: 500;">Import from Dropbox</div>
+                            <div style="font-size: 12px; color: var(--text-muted);">Continuous sync & process</div>
+                        </div>
+                        <i data-lucide="chevron-right" style="color: var(--text-muted);"></i>
+                    </div>
+                </div>
+                
                 <!-- Workers -->
                 <div class="card">
                     <div class="card-header">
@@ -1839,8 +1906,8 @@
                     </div>
                     <div class="card-body">
                         <div class="workers-grid" id="workersGrid"></div>
-        </div>
-    </div>
+                    </div>
+                </div>
 
                 <!-- Current Processing Display -->
                 <div class="card" id="currentProcessingCard" style="display: none; border: 1px solid var(--accent); background: rgba(168, 255, 120, 0.05);">
@@ -2038,8 +2105,8 @@
     </div>
 
     <!-- Dropbox Import Modal -->
-    <div class="modal" id="dropboxModal">
-        <div class="modal-content" style="max-width: 700px;">
+    <div class="modal-overlay" id="dropboxModal">
+        <div class="modal" style="max-width: 700px;">
             <div class="modal-header">
                 <h2 class="modal-title">
                     <i data-lucide="cloud-download"></i>
@@ -2089,22 +2156,28 @@
                         <p class="dropbox-hint">Scan to preview files, or Import All to download and process entire folder</p>
                     </div>
                     
-                    <!-- Bulk Import Status Panel -->
-                    <div id="bulkImportPanel" class="dropbox-progress" style="display: none;">
-                        <div class="dropbox-progress-header">
-                            <span id="bulkImportStatus">Idle</span>
-                            <button class="btn btn-ghost btn-sm" onclick="stopBulkImport()" id="bulkStopBtn" style="display: none;">
-                                <i data-lucide="square"></i> Stop
+                    <!-- Bulk Import Status Panel (minimal - main display is in sidebar) -->
+                    <div id="bulkImportPanel" class="dropbox-progress" style="display: none; background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 8px; padding: 16px;">
+                        <div class="dropbox-progress-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <div style="width: 8px; height: 8px; border-radius: 50%; background: #6366f1; animation: pulse 2s infinite;"></div>
+                                <span id="bulkImportStatus" style="font-weight: 500; color: #a5b4fc;">Running</span>
+                            </div>
+                            <button class="btn btn-ghost btn-sm" onclick="stopBulkImport()" id="bulkStopBtn" style="display: none; color: #ef4444;">
+                                <i data-lucide="square"></i> Stop Import
                             </button>
                         </div>
-                        <div class="progress-bar" style="margin: 12px 0;">
-                            <div class="progress-fill" id="bulkProgressBar" style="width: 0%"></div>
+                        <div class="progress-bar" style="margin: 12px 0; height: 6px; background: var(--bg-tertiary); border-radius: 3px; overflow: hidden;">
+                            <div class="progress-fill" id="bulkProgressBar" style="width: 0%; background: linear-gradient(90deg, #6366f1, #8b5cf6); height: 100%;"></div>
                         </div>
                         <div style="display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted);">
                             <span id="bulkProgressText">0 / 0 files</span>
                             <span id="bulkCurrentFile"></span>
                         </div>
                         <div id="bulkStats" style="margin-top: 8px; font-size: 12px; color: var(--text-muted);"></div>
+                        <p style="margin-top: 12px; font-size: 11px; color: var(--text-muted);">
+                            💡 Status also visible in the sidebar. This import runs continuously until stopped.
+                        </p>
                     </div>
                     
                     <div id="dropboxFileList" class="dropbox-file-list" style="display: none;">
@@ -4344,11 +4417,17 @@
         function showBulkImportPanel() {
             document.getElementById('bulkImportPanel').style.display = 'block';
             document.getElementById('bulkStopBtn').style.display = 'inline-flex';
+            // Show sidebar card, hide quick button
+            document.getElementById('dropboxImportCard').style.display = 'block';
+            document.getElementById('dropboxQuickCard').style.display = 'none';
             lucide.createIcons();
         }
         
         function hideBulkImportPanel() {
-            // Don't hide, just update to show completed state
+            // Show quick button, hide import card when stopped
+            document.getElementById('dropboxImportCard').style.display = 'none';
+            document.getElementById('dropboxQuickCard').style.display = 'block';
+            lucide.createIcons();
         }
         
         function startBulkImportPolling() {
@@ -4376,9 +4455,18 @@
                 const stats = document.getElementById('bulkStats');
                 const stopBtn = document.getElementById('bulkStopBtn');
                 
-                // Show panel if import is active or was recently active
-                if (data.active || data.status !== 'idle') {
+                // Sidebar card elements
+                const sidebarCard = document.getElementById('dropboxImportCard');
+                const quickCard = document.getElementById('dropboxQuickCard');
+                
+                // Show/hide sidebar cards based on import status
+                if (data.active || (data.status && data.status !== 'idle')) {
+                    sidebarCard.style.display = 'block';
+                    quickCard.style.display = 'none';
                     panel.style.display = 'block';
+                } else {
+                    sidebarCard.style.display = 'none';
+                    quickCard.style.display = 'block';
                 }
                 
                 // Update status text
@@ -4390,6 +4478,7 @@
                     'downloading': `⬇️ Downloading... (buffer: ${queueSize}/200)`,
                     'separating': `🎵 Processing... (buffer: ${queueSize}/200)`,
                     'processing': `⚙️ Processing... (buffer: ${queueSize}/200)`,
+                    'watching': `👀 Watching for new files...`,
                     'stopping': '⏸️ Stopping...',
                     'stopped': '⏹️ Stopped',
                     'complete': `✅ Complete! ${data.processed || 0} processed`,
@@ -4400,6 +4489,9 @@
                 // Update progress bar
                 const total = data.total_found || 0;
                 const processed = data.processed || 0;
+                const downloaded = data.downloaded || 0;
+                const failed = data.failed || 0;
+                const skipped = data.skipped || 0;
                 const percent = total > 0 ? Math.round((processed / total) * 100) : 0;
                 progressBar.style.width = `${percent}%`;
                 
@@ -4416,6 +4508,7 @@
                     if (data.status === 'separating') statusIcon = '🎵';
                     else if (data.status === 'downloading') statusIcon = '⬇️';
                     else if (data.status === 'processing') statusIcon = '⚙️';
+                    else if (data.status === 'watching') statusIcon = '👀';
                     currentFile.textContent = `${statusIcon} ${data.current_file}`;
                 } else {
                     currentFile.textContent = '';
@@ -4423,11 +4516,11 @@
                 
                 // Stats
                 let statsText = [];
-                if (data.downloaded > 0) statsText.push(`⬇️ ${data.downloaded}`);
-                if (data.processed > 0) statsText.push(`✅ ${data.processed}`);
-                if (data.skipped > 0) statsText.push(`⏭️ ${data.skipped}`);
-                if (data.failed > 0) statsText.push(`❌ ${data.failed}`);
-                if (data.queue_size > 0) statsText.push(`📋 ${data.queue_size} remaining`);
+                if (downloaded > 0) statsText.push(`⬇️ ${downloaded}`);
+                if (processed > 0) statsText.push(`✅ ${processed}`);
+                if (skipped > 0) statsText.push(`⏭️ ${skipped}`);
+                if (failed > 0) statsText.push(`❌ ${failed}`);
+                if (queueSize > 0) statsText.push(`📋 ${queueSize} queue`);
                 if (data.duration_seconds) {
                     const mins = Math.floor(data.duration_seconds / 60);
                     const secs = data.duration_seconds % 60;
@@ -4435,42 +4528,84 @@
                 }
                 stats.textContent = statsText.join(' | ');
                 
-                // Update top banner
-                const banner = document.getElementById('bulkImportBanner');
-                const bannerText = document.getElementById('bulkBannerText');
-                const bannerStats = document.getElementById('bulkBannerStats');
+                // ===== UPDATE SIDEBAR CARD =====
+                // Status label with color
+                const statusDot = document.getElementById('dropboxStatusDot');
+                const statusLabel = document.getElementById('dropboxStatusLabel');
+                const sidebarProgress = document.getElementById('dropboxProgressBarSidebar');
                 
-                if (data.active) {
-                    banner.style.display = 'block';
-                    document.body.style.paddingTop = '40px';
-                    
-                    if (data.status === 'scanning') {
-                        bannerText.textContent = `📦 Scanning Dropbox... Found ${data.total_found || 0} files`;
-                    } else if (data.status === 'downloading') {
-                        bannerText.textContent = `📦 Downloading ${data.downloaded || 0}/${data.total_found || 0}`;
-                    } else {
-                        bannerText.textContent = `📦 Processing ${data.processed || 0}/${data.total_found || 0}`;
-                    }
-                    bannerStats.textContent = statsText.join(' | ');
+                // Status colors
+                const statusColors = {
+                    'scanning': '#f59e0b',
+                    'downloading': '#6366f1',
+                    'processing': '#8b5cf6',
+                    'watching': '#22c55e',
+                    'stopped': '#ef4444',
+                    'error': '#ef4444'
+                };
+                statusDot.style.background = statusColors[data.status] || '#22c55e';
+                statusDot.style.animation = data.active ? 'pulse 2s infinite' : 'none';
+                
+                // Short status labels for sidebar
+                const shortLabels = {
+                    'idle': 'Ready',
+                    'starting': 'Starting...',
+                    'scanning': 'Scanning...',
+                    'downloading': 'Downloading...',
+                    'processing': 'Processing...',
+                    'watching': 'Watching for files...',
+                    'stopped': 'Stopped',
+                    'complete': 'Complete',
+                    'error': 'Error'
+                };
+                statusLabel.textContent = shortLabels[data.status] || data.status;
+                
+                // Sidebar progress
+                sidebarProgress.style.width = `${percent}%`;
+                
+                // Stats numbers
+                document.getElementById('dropboxDownloaded').textContent = downloaded;
+                document.getElementById('dropboxQueue').textContent = queueSize;
+                document.getElementById('dropboxProcessed').textContent = processed;
+                document.getElementById('dropboxFailed').textContent = failed;
+                document.getElementById('dropboxImportCount').textContent = total;
+                
+                // Current file in sidebar
+                const sidebarCurrentFile = document.getElementById('dropboxCurrentFile');
+                if (data.current_file) {
+                    sidebarCurrentFile.textContent = data.current_file;
+                } else if (data.status === 'watching') {
+                    sidebarCurrentFile.textContent = '👀 Watching for new files...';
                 } else {
-                    banner.style.display = 'none';
+                    sidebarCurrentFile.textContent = 'Ready to import';
+                }
+                
+                // Update top banner (optional - can remove if sidebar is enough)
+                const banner = document.getElementById('bulkImportBanner');
+                if (banner) {
+                    banner.style.display = 'none'; // Hide banner, sidebar is enough
                     document.body.style.paddingTop = '0';
                 }
                 
-                // Show/hide stop button
+                // Show/hide stop buttons
                 stopBtn.style.display = data.active ? 'inline-flex' : 'none';
+                document.getElementById('sidebarStopBtn').style.display = data.active ? 'inline-flex' : 'none';
                 
-                // Stop polling if complete
+                // Handle completion/stop - keep showing card but update status
                 if (!data.active && data.status !== 'idle') {
-                    if (data.status === 'complete') {
-                        showToast(`Bulk import complete! ${processed} files processed.`, 'success');
-                    } else if (data.status === 'stopped') {
+                    if (data.status === 'stopped') {
                         showToast('Bulk import stopped.', 'info');
+                        // Hide card after a delay
+                        setTimeout(() => {
+                            sidebarCard.style.display = 'none';
+                            quickCard.style.display = 'block';
+                        }, 3000);
                     } else if (data.status === 'error') {
                         showToast(`Bulk import error: ${data.error}`, 'error');
                     }
+                    // Note: Don't show "complete" toast for continuous mode - it keeps watching
                     
-                    // Keep polling less frequently to allow viewing final status
+                    // Keep polling less frequently
                     if (bulkImportPolling) {
                         clearInterval(bulkImportPolling);
                         bulkImportPolling = null;
@@ -4498,12 +4633,20 @@
                 .then(r => r.json())
                 .then(data => {
                     console.log('📦 Bulk import status:', data);
-                    if (data.active || (data.status && data.status !== 'idle' && data.status !== 'complete')) {
+                    if (data.active || (data.status && data.status !== 'idle' && data.status !== 'stopped')) {
                         console.log('🔄 Active bulk import detected, resuming display...');
+                        // Show sidebar card
+                        document.getElementById('dropboxImportCard').style.display = 'block';
+                        document.getElementById('dropboxQuickCard').style.display = 'none';
                         showBulkImportPanel();
                         startBulkImportPolling();
                         showToast('📦 Bulk import in progress - resuming display');
+                    } else {
+                        // Show quick import button
+                        document.getElementById('dropboxImportCard').style.display = 'none';
+                        document.getElementById('dropboxQuickCard').style.display = 'block';
                     }
+                    lucide.createIcons();
                 })
                 .catch(e => console.error('Error checking bulk import:', e));
             

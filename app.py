@@ -4932,14 +4932,15 @@ def stop_bulk_import():
 
 def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_path):
     """
-    SMART PIPELINE: Downloads and processes in parallel with buffering.
+    CONTINUOUS SMART PIPELINE: Runs forever until manually stopped.
     
     Strategy:
-    1. Download tracks in parallel (fill buffer up to BUFFER_SIZE)
-    2. Workers process continuously from queue
-    3. When buffer drops below BUFFER_SIZE, download more
+    1. Scan Dropbox folder for files
+    2. Download tracks in parallel (fill buffer up to BUFFER_SIZE)
+    3. Workers process continuously from queue
     4. Delete from Dropbox when processing succeeds
-    5. Loop until all files done
+    5. When all done, wait and scan again for new files
+    6. ONLY stops when manually interrupted or after consecutive empty scans
     
     This maximizes throughput by keeping workers always busy.
     """
@@ -4948,8 +4949,17 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
     # Configuration
     BUFFER_SIZE = 200  # Keep up to 200 tracks waiting to be processed
     DOWNLOAD_BATCH = 50  # Download this many at a time
+    RESCAN_INTERVAL = 30  # Seconds to wait before rescanning for new files
+    MAX_EMPTY_SCANS = 0  # 0 = never stop (keep watching forever)
+    
+    consecutive_empty_scans = 0
+    total_processed_all_time = 0
+    scan_count = 0
     
     try:
+        # Get fresh token (auto-refresh)
+        dropbox_token = get_valid_dropbox_token()
+        
         # Setup headers
         headers = {
             'Authorization': f'Bearer {dropbox_token}',
@@ -4985,88 +4995,128 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
         if namespace_id:
             headers['Dropbox-API-Path-Root'] = json.dumps({'.tag': 'namespace_id', 'namespace_id': namespace_id})
         
-        # PHASE 1: Scan for all files
-        with bulk_import_lock:
-            bulk_import_state['current_status'] = 'scanning'
-            bulk_import_state['last_update'] = time.time()
-        
-        print(f"📦 Scanning '{folder_path or '(root)'}' recursively...")
-        
-        all_files = []
-        has_more = True
-        cursor = None
-        
-        while has_more:
+        # =============================================================================
+        # CONTINUOUS LOOP - Keep running until manually stopped
+        # =============================================================================
+        while True:
+            scan_count += 1
+            
             # Check for stop request
             with bulk_import_lock:
                 if bulk_import_state['stop_requested']:
                     bulk_import_state['current_status'] = 'stopped'
                     bulk_import_state['active'] = False
                     bulk_import_state['last_update'] = time.time()
-                    print("⏹️ Bulk import stopped during scan")
+                    print("⏹️ Bulk import stopped by user")
                     return
             
-            if cursor:
-                response = requests.post(
-                    'https://api.dropboxapi.com/2/files/list_folder/continue',
-                    headers=headers,
-                    json={'cursor': cursor}
-                )
-            else:
-                response = requests.post(
-                    'https://api.dropboxapi.com/2/files/list_folder',
-                    headers=headers,
-                    json={
-                        'path': folder_path,
-                        'recursive': True,
-                        'include_media_info': False,
-                        'include_deleted': False,
-                        'limit': 2000
-                    }
-                )
+            # Refresh token before each scan cycle
+            dropbox_token = get_valid_dropbox_token()
+            headers['Authorization'] = f'Bearer {dropbox_token}'
+        
+            # PHASE 1: Scan for all files
+            with bulk_import_lock:
+                bulk_import_state['current_status'] = 'scanning'
+                bulk_import_state['last_update'] = time.time()
             
-            if response.status_code != 200:
-                error_msg = response.json().get('error_summary', 'Unknown error') if response.text else 'Unknown error'
+            print(f"\n{'='*60}")
+            print(f"🔍 SCAN #{scan_count} - Scanning '{folder_path or '(root)'}' recursively...")
+            print(f"{'='*60}")
+            
+            all_files = []
+            has_more = True
+            cursor = None
+            
+            while has_more:
+                # Check for stop request
                 with bulk_import_lock:
-                    bulk_import_state['error'] = error_msg
-                    bulk_import_state['current_status'] = 'error'
-                    bulk_import_state['active'] = False
+                    if bulk_import_state['stop_requested']:
+                        bulk_import_state['current_status'] = 'stopped'
+                        bulk_import_state['active'] = False
+                        bulk_import_state['last_update'] = time.time()
+                        print("⏹️ Bulk import stopped during scan")
+                        return
+                
+                if cursor:
+                    response = requests.post(
+                        'https://api.dropboxapi.com/2/files/list_folder/continue',
+                        headers=headers,
+                        json={'cursor': cursor}
+                    )
+                else:
+                    response = requests.post(
+                        'https://api.dropboxapi.com/2/files/list_folder',
+                        headers=headers,
+                        json={
+                            'path': folder_path,
+                            'recursive': True,
+                            'include_media_info': False,
+                            'include_deleted': False,
+                            'limit': 2000
+                        }
+                    )
+                
+                # Handle token expiration - refresh and retry
+                if response.status_code == 401 or is_token_expired_error(response):
+                    print("🔄 Token expired during scan, refreshing...")
+                    dropbox_token = get_valid_dropbox_token()
+                    headers['Authorization'] = f'Bearer {dropbox_token}'
+                    continue  # Retry the request
+                
+                if response.status_code != 200:
+                    error_msg = response.json().get('error_summary', 'Unknown error') if response.text else 'Unknown error'
+                    print(f"⚠️ Scan error: {error_msg} - will retry in {RESCAN_INTERVAL}s")
+                    time.sleep(RESCAN_INTERVAL)
+                    continue  # Retry scan
+                
+                result = response.json()
+                
+                for entry in result.get('entries', []):
+                    if entry.get('.tag') == 'file':
+                        name = entry.get('name', '').lower()
+                        if name.endswith('.mp3') or name.endswith('.wav'):
+                            all_files.append({
+                                'name': entry.get('name'),
+                                'path': entry.get('path_display'),
+                                'size': entry.get('size', 0),
+                                'id': entry.get('id')
+                            })
+                
+                with bulk_import_lock:
+                    bulk_import_state['total_scanned'] += len(result.get('entries', []))
+                    bulk_import_state['total_found'] += len(all_files)
+                    bulk_import_state['files_queue'] = all_files.copy()
                     bulk_import_state['last_update'] = time.time()
-                print(f"❌ Scan error: {error_msg}")
-                return
+                
+                has_more = result.get('has_more', False)
+                cursor = result.get('cursor')
             
-            result = response.json()
+            print(f"📦 Scan complete: {len(all_files)} audio files found")
             
-            for entry in result.get('entries', []):
-                if entry.get('.tag') == 'file':
-                    name = entry.get('name', '').lower()
-                    if name.endswith('.mp3') or name.endswith('.wav'):
-                        all_files.append({
-                            'name': entry.get('name'),
-                            'path': entry.get('path_display'),
-                            'size': entry.get('size', 0),
-                            'id': entry.get('id')
-                        })
-                        print(f"📦 Found: {entry.get('name')}")
+            # If no files found, wait and rescan
+            if len(all_files) == 0:
+                consecutive_empty_scans += 1
+                
+                # Check if we should stop (MAX_EMPTY_SCANS = 0 means never stop)
+                if MAX_EMPTY_SCANS > 0 and consecutive_empty_scans >= MAX_EMPTY_SCANS:
+                    with bulk_import_lock:
+                        bulk_import_state['current_status'] = 'complete'
+                        bulk_import_state['active'] = False
+                        bulk_import_state['last_update'] = time.time()
+                    print(f"📦 No files found after {consecutive_empty_scans} scans - stopping")
+                    return
+                
+                with bulk_import_lock:
+                    bulk_import_state['current_status'] = 'watching'
+                    bulk_import_state['current_file'] = f'👀 Watching for new files... (scan #{scan_count})'
+                    bulk_import_state['last_update'] = time.time()
+                
+                print(f"👀 Folder empty - watching for new files (rescan in {RESCAN_INTERVAL}s)...")
+                time.sleep(RESCAN_INTERVAL)
+                continue  # Go back to start of while loop to rescan
             
-            with bulk_import_lock:
-                bulk_import_state['total_scanned'] += len(result.get('entries', []))
-                bulk_import_state['total_found'] = len(all_files)
-                bulk_import_state['files_queue'] = all_files.copy()
-                bulk_import_state['last_update'] = time.time()
-            
-            has_more = result.get('has_more', False)
-            cursor = result.get('cursor')
-        
-        print(f"📦 Scan complete: {len(all_files)} audio files found")
-        
-        if len(all_files) == 0:
-            with bulk_import_lock:
-                bulk_import_state['current_status'] = 'complete'
-                bulk_import_state['active'] = False
-                bulk_import_state['last_update'] = time.time()
-            print("📦 No files to import")
-            return
+            # Reset empty scan counter when files found
+            consecutive_empty_scans = 0
         
         # =============================================================================
         # SMART PIPELINE: Download + Process with Buffer
@@ -5304,14 +5354,24 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                     bulk_import_state['current_file'] = f'⬇️ {downloaded} | ⏳ {current_queue_size} queue | ✅ {processed} done'
                     bulk_import_state['last_update'] = time.time()
                 
-                # Check if all done
+                # Check if current batch is all done
                 total_handled = downloaded + skipped + failed
                 with completed_lock:
                     total_complete = len(completed_tracks)
                 
                 if file_index >= len(all_files) and total_complete >= downloaded:
-                    print(f"\n🎉 All files processed!")
-                    break
+                    total_processed_all_time += bulk_import_state['processed']
+                    print(f"\n✅ Batch complete! Total processed this session: {total_processed_all_time}")
+                    print(f"🔄 Will rescan for new files in {RESCAN_INTERVAL}s...")
+                    
+                    # Reset batch counters but keep running
+                    with bulk_import_lock:
+                        bulk_import_state['current_status'] = 'watching'
+                        bulk_import_state['current_file'] = f'👀 Watching... (processed {total_processed_all_time} total)'
+                        bulk_import_state['last_update'] = time.time()
+                    
+                    time.sleep(RESCAN_INTERVAL)
+                    break  # Break inner loop to rescan
                 
                 # DOWNLOAD LOGIC: Only download if buffer has room
                 if current_queue_size < BUFFER_SIZE and file_index < len(all_files):
@@ -5353,32 +5413,30 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
             print(f"❌ Pipeline error: {e}")
             import traceback
             traceback.print_exc()
-        
-        # Complete
-        with bulk_import_lock:
-            bulk_import_state['current_status'] = 'complete'
-            bulk_import_state['active'] = False
-            bulk_import_state['current_file'] = ''
-            bulk_import_state['last_update'] = time.time()
-        
-        print(f"\n{'='*60}")
-        print(f"🎉 BULK IMPORT COMPLETE!")
-        print(f"   Total found: {bulk_import_state['total_found']}")
-        print(f"   Skipped: {bulk_import_state['skipped']}")
-        print(f"   Downloaded: {bulk_import_state['downloaded']}")
-        print(f"   Processed: {bulk_import_state['processed']}")
-        print(f"   Failed: {bulk_import_state['failed']}")
-        print(f"{'='*60}")
+            # Don't stop on error - wait and retry
+            print(f"🔄 Will retry in {RESCAN_INTERVAL}s...")
+            time.sleep(RESCAN_INTERVAL)
+            
+            # Continue to next scan iteration (outer while loop)
         
     except Exception as e:
         import traceback
-        print(f"❌ Bulk import error: {str(e)}")
+        print(f"❌ Bulk import fatal error: {str(e)}")
         print(traceback.format_exc())
         with bulk_import_lock:
             bulk_import_state['error'] = str(e)
             bulk_import_state['current_status'] = 'error'
             bulk_import_state['active'] = False
             bulk_import_state['last_update'] = time.time()
+    
+    # Final summary (only shown when manually stopped)
+    print(f"\n{'='*60}")
+    print(f"⏹️ BULK IMPORT STOPPED")
+    print(f"   Total scans: {scan_count}")
+    print(f"   Total processed: {total_processed_all_time}")
+    print(f"   Skipped: {bulk_import_state.get('skipped', 0)}")
+    print(f"   Failed: {bulk_import_state.get('failed', 0)}")
+    print(f"{'='*60}")
 
 
 @app.route('/dropbox/import', methods=['POST'])
