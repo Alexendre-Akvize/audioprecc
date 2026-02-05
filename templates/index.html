@@ -2873,6 +2873,9 @@
                     // Sync full track list with server queue items (including failed files)
                     syncTracksFromQueueItems(status.queue_items || [], completedTracks, failedFiles);
                     
+                    // Update queue display (shows tracks waiting/processing)
+                    updateQueueUI(status.queue_items || []);
+                    
                     // Update "Now Processing" card
                     updateCurrentProcessingCard(status.queue_items || []);
                     
