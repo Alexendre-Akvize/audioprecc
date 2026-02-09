@@ -589,10 +589,8 @@ class PrismaDatabaseService:
             # Get file field from type
             file_field = self.get_file_field_from_type(track_type, format_type)
             if not file_field:
-                # Default: use trackWav for WAV, trackFile for MP3
-                is_wav = format_type and format_type.upper() in ('WAV', 'WAVE')
-                file_field = 'trackWav' if is_wav else 'trackFile'
-                print(f"   ⚠️ No specific field for type '{track_type}' + format '{format_type}', using default: {file_field}")
+                print(f"   ❌ No valid field for type '{track_type}' + format '{format_type}' — skipping")
+                return {'error': f"No valid field for type '{track_type}' + format '{format_type}'"}
             
             # Extract base track ID and title
             raw_track_id = sanitized_data.get('TRACK_ID', '')
