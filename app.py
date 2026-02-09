@@ -1923,34 +1923,77 @@ def prepare_track_metadata(edit_info, original_path, bpm, base_url=""):
 import audio_processor
 
 # Detect if GPU is available for Demucs acceleration
+# Allow forcing device via environment variable (useful if auto-detection fails)
+FORCE_DEVICE = os.environ.get('DEMUCS_FORCE_DEVICE', '').strip().lower()  # 'cuda', 'cpu', or empty for auto
+
 def get_demucs_device(force_check=False):
     """Detect best device for Demucs (CUDA GPU or CPU)."""
+    
+    # Allow override via environment variable
+    if FORCE_DEVICE in ('cuda', 'cpu'):
+        print(f"🔧 Device forced via DEMUCS_FORCE_DEVICE={FORCE_DEVICE}")
+        return FORCE_DEVICE
+    
     try:
         import torch
         
+        print(f"🔍 GPU Detection:")
+        print(f"   PyTorch version: {torch.__version__}")
+        print(f"   CUDA compiled: {torch.version.cuda or 'NO'}")
+        print(f"   CUDA available: {torch.cuda.is_available()}")
+        
+        if hasattr(torch.backends, 'cuda'):
+            print(f"   CUDA backend built: {torch.backends.cuda.is_built()}")
+        if hasattr(torch.backends, 'cudnn'):
+            print(f"   cuDNN available: {torch.backends.cudnn.is_available()}")
+            print(f"   cuDNN version: {torch.backends.cudnn.version() if torch.backends.cudnn.is_available() else 'N/A'}")
+        
+        # Check NVIDIA driver
+        try:
+            nvidia_result = subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total,driver_version', '--format=csv,noheader'], 
+                                          capture_output=True, text=True, timeout=10)
+            if nvidia_result.returncode == 0:
+                print(f"   nvidia-smi: {nvidia_result.stdout.strip()}")
+            else:
+                print(f"   nvidia-smi: FAILED (code {nvidia_result.returncode})")
+        except Exception as e:
+            print(f"   nvidia-smi: NOT FOUND ({e})")
+        
         # Force CUDA initialization
         if torch.cuda.is_available():
-            # Try to actually use CUDA to make sure it works
             try:
                 torch.cuda.init()
                 device_count = torch.cuda.device_count()
                 if device_count > 0:
                     gpu_name = torch.cuda.get_device_name(0)
                     gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                    
+                    # Verify CUDA actually works by running a small tensor operation
+                    test_tensor = torch.zeros(1, device='cuda')
+                    del test_tensor
+                    
                     print(f"🚀 GPU détecté: {gpu_name} ({gpu_mem:.0f}GB) - Mode CUDA activé")
                     print(f"   CUDA version: {torch.version.cuda}")
-                    print(f"   PyTorch version: {torch.__version__}")
+                    print(f"   ✅ CUDA test tensor: PASSED")
                     return 'cuda'
+                else:
+                    print(f"   ⚠️ torch.cuda.device_count() = 0")
             except Exception as e:
                 print(f"⚠️ CUDA disponible mais erreur d'init: {e}")
+                import traceback
+                traceback.print_exc()
         else:
             print(f"⚠️ torch.cuda.is_available() = False")
-            print(f"   PyTorch version: {torch.__version__}")
-            print(f"   CUDA built: {torch.backends.cuda.is_built() if hasattr(torch.backends, 'cuda') else 'N/A'}")
+            print(f"   This usually means PyTorch was installed WITHOUT CUDA support.")
+            print(f"   Fix: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121")
+    except ImportError:
+        print(f"❌ PyTorch not installed! Cannot use GPU.")
     except Exception as e:
         print(f"❌ Erreur détection GPU: {e}")
+        import traceback
+        traceback.print_exc()
     
-    print("💻 Mode CPU activé")
+    print("💻 Mode CPU activé (⚠️ MUCH SLOWER - GPU recommended)")
     return 'cpu'
 
 # Detect device at startup
@@ -1959,9 +2002,12 @@ DEMUCS_DEVICE = get_demucs_device()
 def ensure_cuda_device():
     """Re-check CUDA availability (call before processing)."""
     global DEMUCS_DEVICE
-    if DEMUCS_DEVICE == 'cpu':
+    if DEMUCS_DEVICE == 'cpu' and not FORCE_DEVICE:
         # Try again in case CUDA wasn't ready at import time
-        DEMUCS_DEVICE = get_demucs_device(force_check=True)
+        new_device = get_demucs_device(force_check=True)
+        if new_device == 'cuda':
+            DEMUCS_DEVICE = new_device
+            print(f"🚀 CUDA now available! Switching from CPU to GPU")
     return DEMUCS_DEVICE
 
 def create_edits(vocals_path, inst_path, original_path, base_output_path, base_filename):
@@ -2212,10 +2258,12 @@ def run_demucs_thread(filepaths, original_filenames):
             chunk = filepaths[i:i + BATCH_CHUNK_SIZE]
             
             # Optimized Demucs settings for batch processing (H100 + 240GB RAM)
+            # Re-check CUDA before batch (may have become available after startup)
+            ensure_cuda_device()
+            
             if DEMUCS_DEVICE == 'cuda':
                 try:
                     import torch
-                    import psutil
                     gpu_mem_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
                     ram_gb = psutil.virtual_memory().total / (1024**3)
                     
@@ -2230,7 +2278,9 @@ def run_demucs_thread(filepaths, original_filenames):
                 except:
                     batch_jobs = 8
             else:
-                batch_jobs = max(4, CPU_COUNT)
+                # CPU MODE: Keep jobs LOW to avoid 100% CPU / OOM crash
+                batch_jobs = max(1, min(2, CPU_COUNT // 4))
+                log_message(f"⚠️ Batch Demucs on CPU with {batch_jobs} job(s) - GPU recommended!")
             
             command = [
                 'python3', '-m', 'demucs',
@@ -2494,10 +2544,15 @@ def get_optimal_workers():
     except Exception as e:
         print(f"⚠️ GPU detection error: {e}")
     
-    # CPU fallback: with 240GB RAM, we can use more CPU workers
-    if ram_gb >= 200:
-        return min(16, CPU_COUNT)
-    return max(2, min(8, CPU_COUNT // 2))
+    # CPU fallback: IMPORTANT - keep workers LOW on CPU!
+    # Each worker spawns a Demucs subprocess that uses ALL CPU cores
+    # With N workers, you get N * CPU_COUNT threads = instant 100% CPU + OOM
+    # Rule: max 2-3 workers on CPU, regardless of RAM
+    cpu_workers = max(1, min(3, CPU_COUNT // 6))
+    print(f"⚠️ CPU MODE: Only {cpu_workers} workers (CPU can't parallelize like GPU)")
+    print(f"   💡 To use GPU: ensure PyTorch is installed with CUDA support")
+    print(f"   💡 Or set DEMUCS_FORCE_DEVICE=cuda in .env if GPU is available")
+    return cpu_workers
 
 NUM_WORKERS = get_optimal_workers()
 print(f"🔧 Configuration: {CPU_COUNT} CPUs détectés → {NUM_WORKERS} workers parallèles")
@@ -3585,7 +3640,6 @@ def process_single_track(filepath, filename, session_id='global', worker_id=None
                 if device == 'cuda':
                     try:
                         import torch
-                        import psutil
                         gpu_mem_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
                         ram_gb = psutil.virtual_memory().total / (1024**3)
                         
@@ -3601,7 +3655,11 @@ def process_single_track(filepath, filename, session_id='global', worker_id=None
                     except:
                         jobs = 8
                 else:
-                    jobs = max(4, CPU_COUNT)
+                    # CPU MODE: Keep jobs LOW to avoid 100% CPU / OOM crash
+                    # Each Demucs job on CPU uses significant RAM + all CPU cores
+                    # With multiple workers already running, keep this minimal
+                    jobs = max(1, min(2, CPU_COUNT // 4))
+                    log_message(f"⚠️ Running Demucs on CPU with {jobs} job(s) - GPU would be 10x faster!")
                 
                 cmd = [
                     'python3', '-m', 'demucs',
