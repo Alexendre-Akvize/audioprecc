@@ -137,18 +137,18 @@ TYPE_TO_FILE_FIELD_MAP = {
     'preview': 'trackPreview',
 }
 
-# Fields that have WAV variants (only Demucs-generated edits — Main/Original/Extended handled separately)
-# Acapella, Intro, Instrumental, Short, Super Short are MP3-only (no WAV needed)
+# Fields that have WAV variants (append "Wav" to get the WAV field name)
+# Main/Original/Extended are handled separately in get_file_field_from_type
 FIELDS_WITH_WAV_VARIANTS = [
     'clapInMain', 'shortMain', 'shortAcapIn', 'shortClapIn',
     'acapInAcapOutMain', 'slamDirtyMain', 'shortAcapOut',
     'clapInShortAcapOut', 'slamIntroShortAcapOut',
+    'acapIn', 'acapOut', 'intro', 'short', 'acapella', 'instru', 'superShort',
 ]
 
 # Types that are MP3-only — if a WAV is uploaded for these, skip it
-MP3_ONLY_FIELDS = [
-    'acapIn', 'acapOut', 'intro', 'short', 'acapella', 'instru', 'superShort',
-]
+# (Currently none — all fields have WAV variants in the schema)
+MP3_ONLY_FIELDS = []
 
 # Known styles for parsing
 KNOWN_STYLES = [
@@ -589,8 +589,10 @@ class PrismaDatabaseService:
             # Get file field from type
             file_field = self.get_file_field_from_type(track_type, format_type)
             if not file_field:
-                file_field = 'trackFile'
-                print(f"   Using default field: {file_field}")
+                # Default: use trackWav for WAV, trackFile for MP3
+                is_wav = format_type and format_type.upper() in ('WAV', 'WAVE')
+                file_field = 'trackWav' if is_wav else 'trackFile'
+                print(f"   ⚠️ No specific field for type '{track_type}' + format '{format_type}', using default: {file_field}")
             
             # Extract base track ID and title
             raw_track_id = sanitized_data.get('TRACK_ID', '')

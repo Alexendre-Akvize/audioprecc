@@ -996,7 +996,7 @@ def search_deezer_metadata(artist, title, timeout=10):
             return artist_score * 0.4 + title_score * 0.6
 
         # Score all candidates and pick the best
-        MINIMUM_MATCH_SCORE = 0.30  # Below this, treat as no match
+        MINIMUM_MATCH_SCORE = 0.50  # Below this, treat as no match — track will be skipped entirely
         best_track = None
         best_score = -1.0
         for t in tracks:
@@ -2284,12 +2284,17 @@ def prepare_track_metadata(edit_info, original_path, bpm, base_url=""):
         relative_url = edit_info.get('url', '')
         absolute_url = f"{base_url}{relative_url}" if relative_url else ''
         
-        # Extract original cover (Cover 2) from source file and use that URL
-        cover_url = f"{base_url}/static/covers/Cover_Id_by_Rivoli.jpeg"  # Fallback only
+        # Extract original cover ONLY for deemix tracks (they have correct Deezer covers)
+        # For all other sources (DJ pools, etc.), original covers are branded/wrong — skip them
+        cover_url = ''  # Will be filled by Deezer API if match is good
         original_cover_found = False
+        # Check if source is deemix: file path, or Dropbox bulk import folder
+        is_from_deemix = 'deemix' in original_path.lower()
+        if not is_from_deemix and bulk_import_state.get('active'):
+            is_from_deemix = 'deemix' in bulk_import_state.get('folder_path', '').lower()
         
-        # Try to extract original cover from source file
-        if original_tags:
+        if is_from_deemix and original_tags:
+            print(f"   📂 Deemix source detected — extracting original cover")
             # Look for any APIC (cover art) that is NOT the ID By Rivoli cover
             for apic_key in original_tags.keys():
                 if apic_key.startswith('APIC'):
@@ -2319,13 +2324,12 @@ def prepare_track_metadata(edit_info, original_path, bpm, base_url=""):
                         # Use the original cover URL
                         cover_url = f"{base_url}/static/covers/{cover_filename}"
                         original_cover_found = True
-                        print(f"   ✅ Cover originale extraite: {cover_filename}")
+                        print(f"   ✅ Cover originale extraite (deemix): {cover_filename}")
                         break
                     except Exception as e:
                         print(f"   ❌ Could not extract cover from {apic_key}: {e}")
-        
-        if not original_cover_found:
-            print(f"   ⚠️ Pas de cover originale trouvée, utilisation cover ID By Rivoli")
+        elif not is_from_deemix:
+            print(f"   🚫 Non-deemix source — skipping original cover extraction")
         
         # ─── Deezer API: enrich metadata (ISRC, BPM, album, label, genre, cover) ───
         search_artist = artist if artist != 'Unknown' else ''
@@ -2335,7 +2339,7 @@ def prepare_track_metadata(edit_info, original_path, bpm, base_url=""):
             print(f"   🔍 Searching Deezer: '{search_artist}' - '{search_title}'")
             deezer_meta = search_deezer_metadata(search_artist, search_title)
             if deezer_meta.get('deezer_id'):
-                print(f"   ✅ Deezer match: {deezer_meta.get('artist')} - {deezer_meta.get('title')} (ISRC: {deezer_meta.get('isrc', 'N/A')})")
+                print(f"   ✅ Deezer match (score {deezer_meta.get('match_score', 0.0):.2f}): {deezer_meta.get('artist')} - {deezer_meta.get('title')} (ISRC: {deezer_meta.get('isrc', 'N/A')})")
                 
                 # Fill missing fields from Deezer (ID3 tags take priority)
                 if not isrc and deezer_meta.get('isrc'):
@@ -2364,21 +2368,18 @@ def prepare_track_metadata(edit_info, original_path, bpm, base_url=""):
                     except:
                         pass
                 
-                # Cover: Only use Deezer cover if match is confident enough
-                deezer_match_score = deezer_meta.get('match_score', 0.0)
-                if deezer_meta.get('cover_url') and deezer_match_score >= 0.5:
+                # Cover from Deezer
+                if deezer_meta.get('cover_url'):
                     cover_url = deezer_meta['cover_url']
-                    print(f"   🖼️ Cover from Deezer (score {deezer_match_score:.2f}): {cover_url[:80]}...")
-                elif deezer_meta.get('cover_url'):
-                    print(f"   ⚠️ Deezer cover skipped (low match score {deezer_match_score:.2f}), keeping original cover")
+                    print(f"   🖼️ Cover from Deezer: {cover_url[:80]}...")
             else:
                 print(f"   ⚠️ No Deezer match found")
         except Exception as e:
             print(f"   ⚠️ Deezer lookup failed: {e}")
         
-        # ─── FILTER 1: Skip if no Deezer match ───
+        # ─── FILTER: Skip if no Deezer match (confidence already enforced in search) ───
         if not deezer_meta.get('deezer_id'):
-            print(f"   ⏭️ SKIPPED: No Deezer match - track not written to DB")
+            print(f"   ⏭️ SKIPPED: No confident Deezer match - track not written to DB")
             return None
         
         # Generate Track ID (clean format: no dashes, single underscores only)
@@ -2411,7 +2412,7 @@ def prepare_track_metadata(edit_info, original_path, bpm, base_url=""):
             'Url': cover_url,
             'ISRC': isrc,
             'TRACK_ID': track_id,
-            '_force_cover_replace': deezer_meta.get('match_score', 0.0) >= 0.5 if deezer_meta.get('cover_url') else False,
+            '_force_cover_replace': bool(deezer_meta.get('cover_url')),
         }
         
         return track_data
@@ -4723,6 +4724,10 @@ def upload_direct():
     # Skip waveform generation for faster uploads
     skip_waveform = request.form.get('skip_waveform', 'false').lower() == 'true'
     
+    # Detect if file comes from deemix (only deemix tracks keep their original cover)
+    source_folder = request.form.get('source', '')
+    is_from_deemix = 'deemix' in (file.filename or '').lower() or 'deemix' in source_folder.lower()
+    
     # Detect format from file extension
     file_ext = os.path.splitext(file.filename)[1].lower()
     format_type = 'WAV' if file_ext == '.wav' else 'MP3'
@@ -4807,31 +4812,36 @@ def upload_direct():
                     if parent_label == sous_label:
                         parent_label = ''
                 
-                # Extract cover image
-                for apic_key in original_tags.keys():
-                    if apic_key.startswith('APIC'):
-                        try:
-                            original_apic = original_tags[apic_key]
-                            apic_desc = getattr(original_apic, 'desc', '')
-                            if 'ID By Rivoli' in str(apic_desc):
-                                continue
-                            
-                            track_name_clean = re.sub(r'[^\w\s-]', '', os.path.splitext(safe_filename)[0])
-                            track_name_clean = track_name_clean.replace(' ', '_')[:50]
-                            
-                            mime = getattr(original_apic, 'mime', 'image/jpeg')
-                            ext = 'jpg' if 'jpeg' in mime.lower() else 'png'
-                            cover_filename = f"cover_{track_name_clean}.{ext}"
-                            cover_save_path = os.path.join(BASE_DIR, 'static', 'covers', cover_filename)
-                            
-                            with open(cover_save_path, 'wb') as f:
-                                f.write(original_apic.data)
-                            
-                            base_url = CURRENT_HOST_URL if CURRENT_HOST_URL else ""
-                            cover_url = f"{base_url}/static/covers/{cover_filename}"
-                            break
-                        except:
-                            pass
+                # Extract cover image ONLY for deemix tracks (they have correct covers)
+                if is_from_deemix:
+                    log_message(f"📂 [{session_id}] Deemix source — extracting original cover")
+                    for apic_key in original_tags.keys():
+                        if apic_key.startswith('APIC'):
+                            try:
+                                original_apic = original_tags[apic_key]
+                                apic_desc = getattr(original_apic, 'desc', '')
+                                if 'ID By Rivoli' in str(apic_desc):
+                                    continue
+                                
+                                track_name_clean = re.sub(r'[^\w\s-]', '', os.path.splitext(safe_filename)[0])
+                                track_name_clean = track_name_clean.replace(' ', '_')[:50]
+                                
+                                mime = getattr(original_apic, 'mime', 'image/jpeg')
+                                ext = 'jpg' if 'jpeg' in mime.lower() else 'png'
+                                cover_filename = f"cover_{track_name_clean}.{ext}"
+                                cover_save_path = os.path.join(BASE_DIR, 'static', 'covers', cover_filename)
+                                
+                                with open(cover_save_path, 'wb') as f:
+                                    f.write(original_apic.data)
+                                
+                                base_url = CURRENT_HOST_URL if CURRENT_HOST_URL else ""
+                                cover_url = f"{base_url}/static/covers/{cover_filename}"
+                                log_message(f"   ✅ Cover extraite (deemix): {cover_filename}")
+                                break
+                            except:
+                                pass
+                else:
+                    log_message(f"🚫 [{session_id}] Non-deemix source — skipping original cover extraction")
             
             elif format_type == 'WAV':
                 # For WAV files, try to get info from filename or use defaults
@@ -4870,7 +4880,7 @@ def upload_direct():
             log_message(f"🔍 [{session_id}] Searching Deezer: '{search_artist}' - '{search_title}'")
             deezer_meta = search_deezer_metadata(search_artist, search_title)
             if deezer_meta.get('deezer_id'):
-                log_message(f"✅ [{session_id}] Deezer match: {deezer_meta.get('artist')} - {deezer_meta.get('title')} (ISRC: {deezer_meta.get('isrc', 'N/A')})")
+                log_message(f"✅ [{session_id}] Deezer match (score {deezer_meta.get('match_score', 0.0):.2f}): {deezer_meta.get('artist')} - {deezer_meta.get('title')} (ISRC: {deezer_meta.get('isrc', 'N/A')})")
                 
                 # Fill missing fields from Deezer (ID3 tags take priority)
                 if not isrc and deezer_meta.get('isrc'):
@@ -4899,19 +4909,16 @@ def upload_direct():
                     except:
                         pass
                 
-                # Cover: Only use Deezer cover if match is confident enough
-                deezer_match_score = deezer_meta.get('match_score', 0.0)
-                if deezer_meta.get('cover_url') and deezer_match_score >= 0.5:
+                # Cover from Deezer
+                if deezer_meta.get('cover_url'):
                     cover_url = deezer_meta['cover_url']
-                    log_message(f"   🖼️ Cover from Deezer (score {deezer_match_score:.2f}): {cover_url[:80]}...")
-                elif deezer_meta.get('cover_url'):
-                    log_message(f"   ⚠️ Deezer cover skipped (low match score {deezer_match_score:.2f}), keeping original cover")
+                    log_message(f"   🖼️ Cover from Deezer: {cover_url[:80]}...")
             else:
                 log_message(f"⚠️ [{session_id}] No Deezer match found")
         except Exception as e:
             log_message(f"⚠️ [{session_id}] Deezer lookup failed: {e}")
         
-        # ─── FILTER 1: Skip if no Deezer match ───
+        # ─── FILTER: No Deezer match → skip entirely ───
         if not deezer_meta.get('deezer_id'):
             log_message(f"⏭️ [{session_id}] SKIPPED: No Deezer match for '{safe_filename}' - track not written to DB")
             # Clean up temp file
@@ -4920,7 +4927,7 @@ def upload_direct():
             return jsonify({
                 'success': False,
                 'skipped': True,
-                'reason': 'No Deezer match found - track must have metadata from Deezer',
+                'reason': 'No confident Deezer match found',
                 'filename': safe_filename
             }), 200
         
@@ -5005,7 +5012,7 @@ def upload_direct():
             'Url': cover_url,
             'ISRC': isrc,
             'TRACK_ID': track_id,
-            '_force_cover_replace': deezer_meta.get('match_score', 0.0) >= 0.5 if deezer_meta.get('cover_url') else False,
+            '_force_cover_replace': bool(deezer_meta.get('cover_url')),
         }
         
         log_message(f"📤 [{session_id}] Sending to database: {track_title} ({format_type}){' [fast mode]' if skip_waveform else ''}")
@@ -5083,6 +5090,7 @@ def upload_direct_batch():
     
     fallback_track_type = request.form.get('track_type', 'Main')
     skip_waveform = request.form.get('skip_waveform', 'false').lower() == 'true'
+    source_folder = request.form.get('source', '')
     
     results = []
     success_count = 0
@@ -5171,7 +5179,7 @@ def upload_direct_batch():
                 log_message(f"🔍 [{session_id}] Batch Deezer: '{search_artist}' - '{search_title}'")
                 deezer_meta = search_deezer_metadata(search_artist, search_title)
                 if deezer_meta.get('deezer_id'):
-                    log_message(f"✅ [{session_id}] Deezer: {deezer_meta.get('artist')} - {deezer_meta.get('title')}")
+                    log_message(f"✅ [{session_id}] Deezer (score {deezer_meta.get('match_score', 0.0):.2f}): {deezer_meta.get('artist')} - {deezer_meta.get('title')}")
                     if not isrc and deezer_meta.get('isrc'):
                         isrc = deezer_meta['isrc']
                     if bpm is None and deezer_meta.get('bpm'):
@@ -5191,23 +5199,19 @@ def upload_direct_batch():
                             date_sortie = int(date_obj.timestamp())
                         except:
                             pass
-                    # Cover: Only use Deezer cover if match is confident enough
-                    deezer_match_score = deezer_meta.get('match_score', 0.0)
-                    if deezer_meta.get('cover_url') and deezer_match_score >= 0.5:
+                    if deezer_meta.get('cover_url'):
                         cover_url = deezer_meta['cover_url']
-                    elif deezer_meta.get('cover_url'):
-                        log_message(f"   ⚠️ Deezer cover skipped (low score {deezer_match_score:.2f})")
             except Exception as e:
                 log_message(f"⚠️ [{session_id}] Deezer batch error: {e}")
             
-            # ─── FILTER 1: Skip if no Deezer match ───
+            # ─── FILTER: No Deezer match → skip entirely ───
             if not deezer_meta.get('deezer_id'):
                 log_message(f"⏭️ [{session_id}] SKIPPED (batch): No Deezer match for '{safe_filename}'")
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
                 results.append({
                     'filename': safe_filename, 'success': False,
-                    'skipped': True, 'reason': 'No Deezer match found'
+                    'skipped': True, 'reason': 'No confident Deezer match found'
                 })
                 error_count += 1
                 continue
@@ -5281,7 +5285,7 @@ def upload_direct_batch():
                 'Url': cover_url,
                 'ISRC': isrc,
                 'TRACK_ID': track_id,
-                '_force_cover_replace': deezer_meta.get('match_score', 0.0) >= 0.5 if deezer_meta.get('cover_url') else False,
+                '_force_cover_replace': bool(deezer_meta.get('cover_url')),
             }
             
             # Save to database
