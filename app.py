@@ -12,6 +12,9 @@ import re
 import zipfile
 import io
 import csv
+import gc
+import psutil
+import fcntl
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_from_directory, abort, send_file, session, Response
 from mutagen.mp3 import MP3
@@ -44,6 +47,66 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 os.makedirs(PROCESSED_FOLDER, exist_ok=True)
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# =============================================================================
+# MEMORY SAFETY: Prevent OOM crashes by monitoring RAM usage
+# =============================================================================
+MEMORY_HIGH_THRESHOLD = int(os.environ.get('MEMORY_HIGH_THRESHOLD', 85))   # Pause workers at 85% RAM
+MEMORY_CRITICAL_THRESHOLD = int(os.environ.get('MEMORY_CRITICAL_THRESHOLD', 92))  # Force GC at 92% RAM
+MEMORY_RESUME_THRESHOLD = int(os.environ.get('MEMORY_RESUME_THRESHOLD', 75))  # Resume workers at 75% RAM
+DEMUCS_TIMEOUT_SECONDS = int(os.environ.get('DEMUCS_TIMEOUT_SECONDS', 600))  # Kill demucs after 10 min
+memory_throttle_event = threading.Event()
+memory_throttle_event.set()  # Start unblocked
+
+def get_memory_percent():
+    """Get current RAM usage percentage."""
+    try:
+        return psutil.virtual_memory().percent
+    except:
+        return 0
+
+def force_garbage_collect(reason=""):
+    """Force aggressive garbage collection to free memory."""
+    try:
+        collected = gc.collect(generation=2)  # Full collection
+        if reason:
+            print(f"🧹 GC ({reason}): collected {collected} objects, RAM: {get_memory_percent():.1f}%")
+    except:
+        pass
+
+def wait_for_memory_available(worker_id=0, timeout=300):
+    """
+    Block the worker until memory drops below the high threshold.
+    Returns True if memory is available, False if timed out.
+    """
+    mem = get_memory_percent()
+    if mem < MEMORY_HIGH_THRESHOLD:
+        return True
+    
+    print(f"⚠️ Worker {worker_id}: RAM at {mem:.1f}% >= {MEMORY_HIGH_THRESHOLD}% - PAUSING until memory frees up")
+    force_garbage_collect(f"Worker {worker_id} memory pressure")
+    
+    # Wait with exponential backoff
+    wait_time = 2
+    total_waited = 0
+    while total_waited < timeout:
+        time.sleep(wait_time)
+        total_waited += wait_time
+        mem = get_memory_percent()
+        
+        if mem >= MEMORY_CRITICAL_THRESHOLD:
+            print(f"🔴 Worker {worker_id}: CRITICAL RAM {mem:.1f}% - forcing aggressive GC")
+            force_garbage_collect(f"CRITICAL Worker {worker_id}")
+        
+        if mem < MEMORY_RESUME_THRESHOLD:
+            print(f"✅ Worker {worker_id}: RAM dropped to {mem:.1f}% - resuming")
+            return True
+        
+        wait_time = min(wait_time * 1.5, 30)  # Max 30s between checks
+        print(f"⏳ Worker {worker_id}: Still waiting... RAM: {mem:.1f}% (waited {total_waited:.0f}s/{timeout}s)")
+    
+    print(f"⚠️ Worker {worker_id}: Memory timeout after {timeout}s, RAM still at {mem:.1f}% - proceeding anyway")
+    return False
 
 # Multi-user session support
 import uuid
@@ -1954,8 +2017,6 @@ def create_edits(vocals_path, inst_path, original_path, base_output_path, base_f
     edits = []
 
     def export_edit(audio_segment, suffix):
-        from concurrent.futures import ThreadPoolExecutor
-        
         # Use metadata_base_name computed above
         base_name = metadata_base_name
         
@@ -1969,20 +2030,13 @@ def create_edits(vocals_path, inst_path, original_path, base_output_path, base_f
         # Metadata title uses the same base name + suffix
         metadata_title = f"{base_name} - {suffix}"
         
-        # Parallel export of MP3 and WAV for speed
-        def export_mp3():
-            audio_segment.export(out_path_mp3, format="mp3", bitrate="320k")
-            update_metadata(out_path_mp3, "ID By Rivoli", metadata_title, original_path, bpm)
+        # Export sequentially to avoid thread nesting (this is already called from a thread pool)
+        # This prevents thread explosion that was causing OOM crashes
+        audio_segment.export(out_path_mp3, format="mp3", bitrate="320k")
+        update_metadata(out_path_mp3, "ID By Rivoli", metadata_title, original_path, bpm)
         
-        def export_wav():
-            audio_segment.export(out_path_wav, format="wav")
-            update_metadata_wav(out_path_wav, "ID By Rivoli", metadata_title, original_path, bpm)
-        
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            # Export both formats in parallel
-            futures = [executor.submit(export_mp3), executor.submit(export_wav)]
-            for f in futures:
-                f.result()  # Wait for completion
+        audio_segment.export(out_path_wav, format="wav")
+        update_metadata_wav(out_path_wav, "ID By Rivoli", metadata_title, original_path, bpm)
         
         # Use base_name (from metadata) for subdirectory and URLs
         subdir = base_name
@@ -2065,6 +2119,7 @@ def create_edits(vocals_path, inst_path, original_path, base_output_path, base_f
             rms_db = vocals_audio.dBFS
             # Calculate peak level
             peak_db = vocals_audio.max_dBFS
+            del vocals_audio  # Free memory immediately after analysis
             
             print(f"   🎤 Analyse vocale: RMS={rms_db:.1f}dB, Peak={peak_db:.1f}dB (seuil={threshold_db}dB)")
             
@@ -2091,11 +2146,13 @@ def create_edits(vocals_path, inst_path, original_path, base_output_path, base_f
     # 1. Main (Original) - Always
     original = AudioSegment.from_mp3(original_path)
     edits.append(export_edit(original, "Main"))
+    del original  # Free memory immediately
     
     # 2. Acapella (Vocals only) - Only if vocals detected
     if vocals_path and os.path.exists(vocals_path) and vocals_detected:
         vocals = AudioSegment.from_mp3(vocals_path)
         edits.append(export_edit(vocals, "Acapella"))
+        del vocals  # Free memory immediately
         log_message(f"✓ Version Acapella créée")
     elif vocals_path and os.path.exists(vocals_path) and not vocals_detected:
         log_message(f"⏭️ Acapella ignorée (pas de voix détectées)")
@@ -2106,9 +2163,13 @@ def create_edits(vocals_path, inst_path, original_path, base_output_path, base_f
     if inst_path and os.path.exists(inst_path):
         instrumental = AudioSegment.from_mp3(inst_path)
         edits.append(export_edit(instrumental, "Instrumental"))
+        del instrumental  # Free memory immediately
         log_message(f"✓ Version Instrumentale créée")
     else:
         log_message(f"⚠️ Pas de fichier instrumental")
+    
+    # Force garbage collection after processing all edits (frees large audio buffers)
+    gc.collect()
     
     # Register track as pending download - files stay until all are downloaded
     # Count actual files: each edit has MP3 + WAV = 2 files per edit
@@ -2138,8 +2199,17 @@ def run_demucs_thread(filepaths, original_filenames):
 
         current_file_index = 0
 
-        for i in range(0, len(filepaths), 50):
-            chunk = filepaths[i:i + 50]
+        # Dynamic chunk size: reduce if memory is high
+        BATCH_CHUNK_SIZE = 50
+        for i in range(0, len(filepaths), BATCH_CHUNK_SIZE):
+            # Check memory before each chunk
+            mem = get_memory_percent()
+            if mem >= MEMORY_HIGH_THRESHOLD:
+                print(f"⚠️ Batch: RAM at {mem:.1f}% - pausing before next chunk...")
+                force_garbage_collect("Batch pre-chunk")
+                wait_for_memory_available(worker_id=0, timeout=120)
+            
+            chunk = filepaths[i:i + BATCH_CHUNK_SIZE]
             
             # Optimized Demucs settings for batch processing (H100 + 240GB RAM)
             if DEMUCS_DEVICE == 'cuda':
@@ -2192,13 +2262,13 @@ def run_demucs_thread(filepaths, original_filenames):
             )
 
             current_chunk_base = i
+            last_output_time = time.time()
 
             for line in process.stdout:
+                last_output_time = time.time()
                 print(line, end='')
                 
                 if "Separating track" in line:
-                    # Parse filename from line if possible, or just increment
-                    # Demucs output: "Separating track filename.mp3"
                     try:
                         match = re.search(r"Separating track\s+(.+)$", line)
                         if match:
@@ -2211,31 +2281,20 @@ def run_demucs_thread(filepaths, original_filenames):
                     current_file_index += 1
                     job_status['current_file_idx'] = current_file_index
                     
-                    # Calculate global progress (0-50%)
-                    # Phase 1 is separation (0-50%), Phase 2 is editing (50-100%)
-                    # Actually, Demucs takes most of the time. Let's say Demucs is 0-90%?
-                    # The user prompt implies Edit generation is fast.
-                    # But previous code had 0-50 / 50-100.
-                    # Let's keep 0-50 for Demucs for now, but update UI to be clearer.
-                    
                     percent_per_file = 50 / len(filepaths)
                     base_progress = (current_file_index - 1) * percent_per_file
                     job_status['progress'] = int(base_progress)
                     job_status['current_step'] = f"Séparation IA (Lot {chunk_num}/{total_chunks})"
 
                 elif "%|" in line:
-                    # Demucs progress bar " 15%|███      | 20/130 [00:05<00:25,  4.23it/s]"
                     try:
-                        # Extract percentage
                         parts = line.split('%|')
                         if len(parts) > 0:
                             percent_part = parts[0].strip()
-                            # Use regex to find last number before %
                             p_match = re.search(r'(\d+)$', percent_part)
                             if p_match:
                                 track_percent = int(p_match.group(1))
                                 
-                                # Add fractional progress for current file
                                 percent_per_file = 50 / len(filepaths)
                                 base_progress = (current_file_index - 1) * percent_per_file
                                 added_progress = (track_percent / 100) * percent_per_file
@@ -2244,6 +2303,9 @@ def run_demucs_thread(filepaths, original_filenames):
                         pass
             
             process.wait()
+            
+            # Force GC between chunks to free memory
+            force_garbage_collect(f"Batch chunk {chunk_num}/{total_chunks}")
             
             if process.returncode != 0:
                 job_status['state'] = 'error'
@@ -2289,9 +2351,9 @@ def run_demucs_thread(filepaths, original_filenames):
                 print(f"Warning: Output files not found for {track_name}")
         
         # Process edits in parallel using ThreadPoolExecutor
-        # With 240GB RAM and 20 vCPUs, we can max out edit workers
-        edit_workers = max(8, min(NUM_WORKERS, CPU_COUNT))
-        print(f"🚀 Génération des edits avec {edit_workers} workers parallèles")
+        # Limit workers to avoid memory overload (each edit loads ~3 audio files)
+        edit_workers = max(2, min(NUM_WORKERS // 2, CPU_COUNT // 2, 8))
+        print(f"🚀 Génération des edits avec {edit_workers} workers parallèles [RAM: {get_memory_percent():.1f}%]")
         
         from concurrent.futures import ThreadPoolExecutor, as_completed
         with ThreadPoolExecutor(max_workers=edit_workers) as executor:
@@ -2932,7 +2994,10 @@ def worker(worker_id):
             # Update tracker: now processing
             update_queue_item(filename, status='processing', worker=worker_id, progress=0, step='Démarrage...')
             
-            print(f"🔄 Worker {worker_id} traite: {filename}" + (" (RETRY)" if is_retry else ""))
+            # MEMORY SAFETY: Wait if RAM is too high before starting new track
+            wait_for_memory_available(worker_id)
+            
+            print(f"🔄 Worker {worker_id} traite: {filename}" + (" (RETRY)" if is_retry else "") + f" [RAM: {get_memory_percent():.1f}%]")
             success, error_msg = process_single_track(filepath, filename, session_id, worker_id, is_retry)
             
             # Handle result
@@ -2949,6 +3014,9 @@ def worker(worker_id):
             
             track_queue.task_done()
             current_filename = None  # Clear so exception handler doesn't double-process
+            
+            # MEMORY SAFETY: Force garbage collection after each track
+            force_garbage_collect(f"Worker {worker_id} after {filename}")
             
             # Reset state to idle if queue is empty
             if track_queue.empty():
@@ -2990,6 +3058,53 @@ for i in range(NUM_WORKERS):
     t.start()
     worker_threads.append(t)
 print(f"🚀 {NUM_WORKERS} workers démarrés")
+
+# =============================================================================
+# MEMORY WATCHDOG: Background thread that monitors RAM and prevents OOM crashes
+# =============================================================================
+MEMORY_WATCHDOG_INTERVAL = int(os.environ.get('MEMORY_WATCHDOG_INTERVAL', 15))  # Check every 15 seconds
+
+def memory_watchdog():
+    """Background thread that monitors memory and forces cleanup when needed."""
+    consecutive_high = 0
+    while True:
+        try:
+            time.sleep(MEMORY_WATCHDOG_INTERVAL)
+            mem = get_memory_percent()
+            
+            if mem >= MEMORY_CRITICAL_THRESHOLD:
+                consecutive_high += 1
+                print(f"🔴 MEMORY WATCHDOG: CRITICAL {mem:.1f}% (consecutive: {consecutive_high})")
+                
+                # Force aggressive garbage collection
+                force_garbage_collect("WATCHDOG CRITICAL")
+                
+                # If memory stays critical for 3+ checks, try to free torch cache
+                if consecutive_high >= 3:
+                    try:
+                        import torch
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                            print(f"🔴 WATCHDOG: Cleared CUDA cache")
+                    except:
+                        pass
+                        
+            elif mem >= MEMORY_HIGH_THRESHOLD:
+                consecutive_high += 1
+                if consecutive_high % 4 == 0:  # Log every 4th check to avoid spam
+                    print(f"⚠️ MEMORY WATCHDOG: HIGH {mem:.1f}% (consecutive: {consecutive_high})")
+                force_garbage_collect("WATCHDOG HIGH")
+            else:
+                if consecutive_high > 0:
+                    print(f"✅ MEMORY WATCHDOG: Recovered to {mem:.1f}% (was high for {consecutive_high} checks)")
+                consecutive_high = 0
+                
+        except Exception as e:
+            print(f"⚠️ Memory watchdog error: {e}")
+
+watchdog_thread = threading.Thread(target=memory_watchdog, daemon=True)
+watchdog_thread.start()
+print(f"🛡️ Memory watchdog started (check every {MEMORY_WATCHDOG_INTERVAL}s, high={MEMORY_HIGH_THRESHOLD}%, critical={MEMORY_CRITICAL_THRESHOLD}%)")
 
 # Configuration for startup cleanup
 CLEANUP_ON_START = os.environ.get('CLEANUP_ON_START', 'true').lower() == 'true'
@@ -3274,21 +3389,15 @@ def process_track_without_separation(filepath, filename, track_type, session_id=
         
         metadata_title = f"{metadata_base_name} - {suffix}"
         
-        # Export both formats
-        from concurrent.futures import ThreadPoolExecutor
+        # Export both formats sequentially (avoids thread nesting & memory spikes)
+        original.export(out_path_mp3, format="mp3", bitrate="320k")
+        update_metadata(out_path_mp3, "ID By Rivoli", metadata_title, filepath, bpm)
         
-        def export_mp3():
-            original.export(out_path_mp3, format="mp3", bitrate="320k")
-            update_metadata(out_path_mp3, "ID By Rivoli", metadata_title, filepath, bpm)
+        original.export(out_path_wav, format="wav")
+        update_metadata_wav(out_path_wav, "ID By Rivoli", metadata_title, filepath, bpm)
         
-        def export_wav():
-            original.export(out_path_wav, format="wav")
-            update_metadata_wav(out_path_wav, "ID By Rivoli", metadata_title, filepath, bpm)
-        
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            futures = [executor.submit(export_mp3), executor.submit(export_wav)]
-            for f in futures:
-                f.result()
+        del original  # Free audio memory immediately
+        gc.collect()
         
         update_queue_item(filename, progress=80, step='Envoi API...')
         
@@ -3523,30 +3632,73 @@ def process_single_track(filepath, filename, session_id='global', worker_id=None
                 )
                 
                 output_lines = []
-                for line in proc.stdout:
-                    print(line, end='')
-                    output_lines.append(line)
-                    
-                    # Check for CUDA/GPU related messages
-                    line_lower = line.lower()
-                    if 'cuda' in line_lower or 'gpu' in line_lower or 'cpu' in line_lower:
-                        log_message(f"🔍 Demucs: {line.strip()}")
-                    
-                    if "%|" in line:
-                        try:
-                            parts = line.split('%|')
-                            if len(parts) > 0:
-                                percent_part = parts[0].strip()
-                                p_match = re.search(r'(\d+)$', percent_part)
-                                if p_match:
-                                    track_percent = int(p_match.group(1))
-                                    current_status['progress'] = int(track_percent * 0.7)
-                                    # Update queue tracker with progress
-                                    update_queue_item(filename, progress=int(track_percent * 0.7), step=f'Séparation IA {track_percent}%{retry_label}')
-                        except:
-                            pass
+                last_output_time = time.time()
                 
-                proc.wait()
+                # Make stdout non-blocking for timeout support
+                fd = proc.stdout.fileno()
+                fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+                fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+                
+                while proc.poll() is None:
+                    # Check for timeout (no output for DEMUCS_TIMEOUT_SECONDS)
+                    elapsed_since_output = time.time() - last_output_time
+                    if elapsed_since_output > DEMUCS_TIMEOUT_SECONDS:
+                        print(f"🔴 DEMUCS TIMEOUT: No output for {DEMUCS_TIMEOUT_SECONDS}s - killing process {proc.pid}")
+                        proc.kill()
+                        proc.wait()
+                        output_lines.append(f"TIMEOUT: Process killed after {DEMUCS_TIMEOUT_SECONDS}s of no output\n")
+                        return -1, output_lines
+                    
+                    # Check memory during Demucs processing
+                    mem = get_memory_percent()
+                    if mem >= MEMORY_CRITICAL_THRESHOLD:
+                        print(f"🔴 MEMORY CRITICAL during Demucs: {mem:.1f}% - killing process {proc.pid}")
+                        proc.kill()
+                        proc.wait()
+                        force_garbage_collect("Demucs killed due to memory")
+                        output_lines.append(f"OOM: Process killed, RAM at {mem:.1f}%\n")
+                        return -2, output_lines
+                    
+                    # Try to read available output
+                    try:
+                        line = proc.stdout.readline()
+                        if line:
+                            last_output_time = time.time()
+                            print(line, end='')
+                            output_lines.append(line)
+                            
+                            # Check for CUDA/GPU related messages
+                            line_lower = line.lower()
+                            if 'cuda' in line_lower or 'gpu' in line_lower or 'cpu' in line_lower:
+                                log_message(f"🔍 Demucs: {line.strip()}")
+                            
+                            if "%|" in line:
+                                try:
+                                    parts = line.split('%|')
+                                    if len(parts) > 0:
+                                        percent_part = parts[0].strip()
+                                        p_match = re.search(r'(\d+)$', percent_part)
+                                        if p_match:
+                                            track_percent = int(p_match.group(1))
+                                            current_status['progress'] = int(track_percent * 0.7)
+                                            update_queue_item(filename, progress=int(track_percent * 0.7), step=f'Séparation IA {track_percent}%{retry_label}')
+                                except:
+                                    pass
+                        else:
+                            time.sleep(0.5)  # Brief sleep when no output available
+                    except (IOError, OSError):
+                        time.sleep(0.5)  # No data available yet
+                
+                # Read any remaining output after process ends
+                try:
+                    remaining = proc.stdout.read()
+                    if remaining:
+                        for line in remaining.splitlines(True):
+                            print(line, end='')
+                            output_lines.append(line)
+                except:
+                    pass
+                
                 return proc.returncode, output_lines
             
             # Try with detected device first

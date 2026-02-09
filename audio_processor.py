@@ -4,11 +4,15 @@ from pydub import AudioSegment
 from pydub.generators import WhiteNoise, Sine
 import random
 import os
+import gc
 
 def detect_bpm(file_path):
     try:
         y, sr = librosa.load(file_path, duration=120)
         tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+        # Free the large audio array immediately
+        del y
+        
         if hasattr(tempo, 'item'):
             bpm = round(tempo.item())
         elif isinstance(tempo, np.ndarray):
@@ -95,9 +99,8 @@ def find_drop_start(inst_segment, beat_ms, sr=44100):
     # Convert best_idx back to ms
     best_start_ms = int(best_idx / samples_per_ms) + start_offset
     
-    # Align to nearest beat? 
-    # Ideally yes, but "exact drop" might not be exactly on our beat grid if bpm varies slightly.
-    # We will return the found time.
+    # Free large numpy arrays
+    del samples, sq_samples
     
     return best_start_ms
 
@@ -280,6 +283,12 @@ def process_track(vocals_path, inst_path, original_path, bpm):
     # 10. Short Acap Out
     short_acap_out = break_segment + original[drop_start : drop_start + ms_32_beats] + drop_voc
     edits.append(("Short Acap Out", short_acap_out))
+    
+    # Free source audio objects (edits hold their own copies)
+    del vocals, inst, original
+    del drop_voc, drop_inst, fx_hit
+    del intro_inst_16b, outro_inst_32b, clap_loop_16, clap_in_section
+    gc.collect()
     
     return edits
 

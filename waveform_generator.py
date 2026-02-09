@@ -67,6 +67,9 @@ def generate_waveform(
     # Get duration in seconds
     duration = len(audio) / 1000.0  # pydub duration is in milliseconds
     
+    # Free large arrays
+    del samples, audio
+    
     return {
         'waveform': peaks,
         'duration': duration
