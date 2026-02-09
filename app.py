@@ -7202,22 +7202,45 @@ def debug_gpu():
     """Debug route to check GPU/CUDA status."""
     info = {
         'demucs_device': DEMUCS_DEVICE,
+        'force_device_env': FORCE_DEVICE or 'auto',
+        'num_workers': NUM_WORKERS,
+        'cpu_count': CPU_COUNT,
         'cuda_available': False,
         'cuda_version': None,
         'pytorch_version': None,
         'gpu_name': None,
         'gpu_memory_gb': None,
         'gpu_count': 0,
+        'ram_gb': round(psutil.virtual_memory().total / (1024**3), 1),
+        'ram_used_percent': psutil.virtual_memory().percent,
+        'cpu_percent': psutil.cpu_percent(interval=0.5),
+        'nvidia_smi': None,
+        'fix_suggestions': [],
         'error': None
     }
+    
+    # Check nvidia-smi
+    try:
+        nvidia_result = subprocess.run(['nvidia-smi'], capture_output=True, text=True, timeout=10)
+        info['nvidia_smi'] = nvidia_result.stdout if nvidia_result.returncode == 0 else f"FAILED: {nvidia_result.stderr}"
+    except Exception as e:
+        info['nvidia_smi'] = f"NOT FOUND: {e}"
     
     try:
         import torch
         info['pytorch_version'] = torch.__version__
         info['cuda_available'] = torch.cuda.is_available()
+        info['cuda_compiled_version'] = torch.version.cuda or 'NO CUDA IN THIS BUILD'
         
-        if hasattr(torch.version, 'cuda'):
-            info['cuda_version'] = torch.version.cuda
+        if hasattr(torch.backends, 'cuda'):
+            info['cuda_backend_built'] = torch.backends.cuda.is_built()
+        if hasattr(torch.backends, 'cudnn'):
+            info['cudnn_available'] = torch.backends.cudnn.is_available()
+        
+        if not torch.cuda.is_available():
+            info['fix_suggestions'].append('PyTorch has NO CUDA support. Reinstall with: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121')
+            if not torch.version.cuda:
+                info['fix_suggestions'].append('This PyTorch build was compiled WITHOUT CUDA (CPU-only version)')
         
         if torch.cuda.is_available():
             info['gpu_count'] = torch.cuda.device_count()
@@ -7225,12 +7248,19 @@ def debug_gpu():
                 info['gpu_name'] = torch.cuda.get_device_name(0)
                 props = torch.cuda.get_device_properties(0)
                 info['gpu_memory_gb'] = round(props.total_memory / (1024**3), 1)
-                
-                # Current memory usage
                 info['gpu_memory_allocated_gb'] = round(torch.cuda.memory_allocated(0) / (1024**3), 2)
                 info['gpu_memory_reserved_gb'] = round(torch.cuda.memory_reserved(0) / (1024**3), 2)
+                
+                if DEMUCS_DEVICE == 'cpu':
+                    info['fix_suggestions'].append('GPU is available but Demucs is using CPU! Try restarting the app or set DEMUCS_FORCE_DEVICE=cuda in .env')
+    except ImportError:
+        info['error'] = 'PyTorch not installed'
+        info['fix_suggestions'].append('Install PyTorch with CUDA: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121')
     except Exception as e:
         info['error'] = str(e)
+    
+    if DEMUCS_DEVICE == 'cpu':
+        info['fix_suggestions'].append('Workaround: Add DEMUCS_FORCE_DEVICE=cuda to your .env file and restart')
     
     return jsonify(info)
 
