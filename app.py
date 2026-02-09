@@ -3664,7 +3664,9 @@ watchdog_thread.start()
 print(f"🛡️ Memory watchdog started (check every {MEMORY_WATCHDOG_INTERVAL}s, high={MEMORY_HIGH_THRESHOLD}%, critical={MEMORY_CRITICAL_THRESHOLD}%)")
 
 # Configuration for startup cleanup
-CLEANUP_ON_START = os.environ.get('CLEANUP_ON_START', 'true').lower() == 'true'
+# Disabled by default - prevents data loss on server restart/page refresh
+# Set CLEANUP_ON_START=true to enable (e.g., for fresh deployments)
+CLEANUP_ON_START = os.environ.get('CLEANUP_ON_START', 'false').lower() == 'true'
 DELETE_AFTER_DOWNLOAD = os.environ.get('DELETE_AFTER_DOWNLOAD', 'false').lower() == 'true'  # Disabled by default - files deleted via /confirm_download or periodic cleanup
 
 def startup_cleanup():
@@ -5815,11 +5817,18 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
     """
     global bulk_import_state
     
-    # Configuration
-    BUFFER_SIZE = 200  # Keep up to 200 tracks waiting to be processed
-    DOWNLOAD_BATCH = 50  # Download this many at a time
+    # Configuration - scale buffer based on worker count to avoid overwhelming resources
+    # Each queued track takes ~5-15MB disk + the worker uses ~2-4GB RAM for demucs
+    # Keep buffer proportional to what workers can actually process
+    BUFFER_SIZE = max(5, NUM_WORKERS * 5)  # 5 tracks per worker (not 200 hardcoded)
+    DOWNLOAD_BATCH = max(2, NUM_WORKERS * 2)  # Download 2 per worker at a time
     RESCAN_INTERVAL = 30  # Seconds to wait before rescanning for new files
     MAX_EMPTY_SCANS = 2  # Stop after N consecutive empty scans (0 = never stop)
+    
+    # Resource safety thresholds for bulk import
+    BULK_MEMORY_PAUSE_THRESHOLD = MEMORY_HIGH_THRESHOLD  # Pause downloads at this RAM %
+    BULK_DISK_MIN_FREE_GB = 5  # Minimum free disk space to continue downloading
+    BULK_CPU_PAUSE_THRESHOLD = 95  # Pause downloads when CPU > 95%
     
     consecutive_empty_scans = 0
     total_processed_all_time = 0
@@ -5906,24 +5915,36 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                         print("⏹️ Bulk import stopped during scan")
                         return
                 
-                if cursor:
-                    response = requests.post(
-                        'https://api.dropboxapi.com/2/files/list_folder/continue',
-                        headers=headers,
-                        json={'cursor': cursor}
-                    )
-                else:
-                    response = requests.post(
-                        'https://api.dropboxapi.com/2/files/list_folder',
-                        headers=headers,
-                        json={
-                            'path': folder_path,
-                            'recursive': True,
-                            'include_media_info': False,
-                            'include_deleted': False,
-                            'limit': 2000
-                        }
-                    )
+                try:
+                    if cursor:
+                        response = requests.post(
+                            'https://api.dropboxapi.com/2/files/list_folder/continue',
+                            headers=headers,
+                            json={'cursor': cursor},
+                            timeout=60
+                        )
+                    else:
+                        response = requests.post(
+                            'https://api.dropboxapi.com/2/files/list_folder',
+                            headers=headers,
+                            json={
+                                'path': folder_path,
+                                'recursive': True,
+                                'include_media_info': False,
+                                'include_deleted': False,
+                                'limit': 2000
+                            },
+                            timeout=60
+                        )
+                except requests.exceptions.RequestException as e:
+                    print(f"⚠️ Network error during scan: {e} - will retry in {RESCAN_INTERVAL}s")
+                    time.sleep(RESCAN_INTERVAL)
+                    # Refresh token and retry
+                    dropbox_token = get_valid_dropbox_token()
+                    headers['Authorization'] = f'Bearer {dropbox_token}'
+                    cursor = None  # Reset cursor to restart scan from scratch
+                    all_files = []  # Reset files list
+                    continue  # Retry scan
                 
                 # Handle token expiration - refresh and retry
                 if response.status_code == 401 or is_token_expired_error(response):
@@ -5933,12 +5954,20 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                     continue  # Retry the request
                 
                 if response.status_code != 200:
-                    error_msg = response.json().get('error_summary', 'Unknown error') if response.text else 'Unknown error'
+                    try:
+                        error_msg = response.json().get('error_summary', 'Unknown error') if response.text else 'Unknown error'
+                    except (ValueError, KeyError):
+                        error_msg = f'HTTP {response.status_code}: {response.text[:200] if response.text else "Unknown error"}'
                     print(f"⚠️ Scan error: {error_msg} - will retry in {RESCAN_INTERVAL}s")
                     time.sleep(RESCAN_INTERVAL)
                     continue  # Retry scan
                 
-                result = response.json()
+                try:
+                    result = response.json()
+                except ValueError:
+                    print(f"⚠️ Invalid JSON response from Dropbox - will retry in {RESCAN_INTERVAL}s")
+                    time.sleep(RESCAN_INTERVAL)
+                    continue  # Retry scan
                 
                 for entry in result.get('entries', []):
                     if entry.get('.tag') == 'file':
@@ -6032,38 +6061,39 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
 
             def download_single_file(file_info):
                 """Download a single file from Dropbox."""
-                dropbox_path = file_info['path']
-                file_name = file_info['name']
-
-                with files_lock:
-                    current_index = download_index[0]
-                    download_index[0] += 1
-
-                # Check for stop
-                with bulk_import_lock:
-                    if bulk_import_state['stop_requested']:
-                        return {'status': 'stopped', 'name': file_name}
-
-                # TITLE FILTERING - Skip tracks with banned keywords
-                title_result = process_track_title_for_import(file_name)
-
-                if title_result['skip']:
-                    print(f"⏭️  [{current_index+1}/{len(all_files)}] SKIP: {file_name} ({title_result['skip_reason']})")
-
-                    # Delete from Dropbox
-                    delete_from_dropbox_if_skipped(dropbox_path, dropbox_token, dropbox_team_member_id, namespace_id)
-
-                    with bulk_import_lock:
-                        bulk_import_state['skipped'] += 1
-                        bulk_import_state['skipped_files'].append({
-                            'name': file_name,
-                            'reason': title_result['skip_reason']
-                        })
-                        bulk_import_state['last_update'] = time.time()
-
-                    return {'status': 'skipped', 'name': file_name}
-
+                file_name = file_info.get('name', 'unknown')
+                current_index = 0
                 try:
+                    dropbox_path = file_info['path']
+
+                    with files_lock:
+                        current_index = download_index[0]
+                        download_index[0] += 1
+
+                    # Check for stop
+                    with bulk_import_lock:
+                        if bulk_import_state['stop_requested']:
+                            return {'status': 'stopped', 'name': file_name}
+
+                    # TITLE FILTERING - Skip tracks with banned keywords
+                    title_result = process_track_title_for_import(file_name)
+
+                    if title_result['skip']:
+                        print(f"⏭️  [{current_index+1}/{len(all_files)}] SKIP: {file_name} ({title_result['skip_reason']})")
+
+                        # Delete from Dropbox
+                        delete_from_dropbox_if_skipped(dropbox_path, dropbox_token, dropbox_team_member_id, namespace_id)
+
+                        with bulk_import_lock:
+                            bulk_import_state['skipped'] += 1
+                            bulk_import_state['skipped_files'].append({
+                                'name': file_name,
+                                'reason': title_result['skip_reason']
+                            })
+                            bulk_import_state['last_update'] = time.time()
+
+                        return {'status': 'skipped', 'name': file_name}
+
                     # Prepare filename
                     cleaned_title = title_result['cleaned_title']
                     extension = os.path.splitext(file_name)[1]  # e.g. ".mp3"
@@ -6113,10 +6143,15 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                     with dropbox_paths_lock:
                         dropbox_paths[safe_filename] = dropbox_path
 
-                    # Update state
+                    # Update state (both global and per-iteration counters)
                     with bulk_import_lock:
                         bulk_import_state['downloaded'] += 1
                         bulk_import_state['last_update'] = time.time()
+                    
+                    # Thread-safe increment of per-iteration counter
+                    nonlocal iteration_downloaded
+                    with files_lock:
+                        iteration_downloaded += 1
 
                     # Queue for processing
                     with queue_items_lock:
@@ -6133,7 +6168,7 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                     return {'status': 'ok', 'name': file_name, 'safe_filename': safe_filename}
 
                 except Exception as e:
-                    print(f"❌ [{current_index+1}/{len(all_files)}] {file_name}: {str(e)[:50]}")
+                    print(f"❌ [{current_index+1}/{len(all_files)}] {file_name}: {str(e)[:100]}")
                     with bulk_import_lock:
                         bulk_import_state['failed'] += 1
                         bulk_import_state['failed_files'].append({'name': file_name, 'error': str(e)})
@@ -6245,6 +6280,7 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                 bulk_import_state['last_update'] = time.time()
 
             file_index = 0
+            iteration_downloaded = 0  # Per-iteration download counter (NOT accumulated across rescans)
             download_threads = min(NUM_WORKERS, 10)  # Limit concurrent downloads
 
             print(f"🚀 Starting pipeline with {download_threads} download threads")
@@ -6275,11 +6311,11 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                         bulk_import_state['last_update'] = time.time()
 
                     # Check if current batch is all done
-                    total_handled = downloaded + skipped + failed
+                    # Use per-iteration counter (NOT global downloaded which accumulates across rescans)
                     with completed_lock:
                         total_complete = len(completed_tracks)
 
-                    if file_index >= len(all_files) and total_complete >= downloaded:
+                    if file_index >= len(all_files) and total_complete >= iteration_downloaded:
                         total_processed_all_time += bulk_import_state['processed']
                         print(f"\n✅ Batch complete! Total processed this session: {total_processed_all_time}")
                         print(f"🔄 Rescanning folder to check for remaining files...")
@@ -6293,8 +6329,50 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                         time.sleep(RESCAN_INTERVAL)
                         break  # Break inner loop to rescan
 
-                    # DOWNLOAD LOGIC: Only download if buffer has room
-                    if current_queue_size < BUFFER_SIZE and file_index < len(all_files):
+                    # ===== RESOURCE SAFETY CHECKS before downloading =====
+                    resource_ok = True
+                    
+                    # Check RAM - pause downloads if memory is high
+                    mem_percent = get_memory_percent()
+                    if mem_percent >= BULK_MEMORY_PAUSE_THRESHOLD:
+                        resource_ok = False
+                        if mem_percent >= MEMORY_CRITICAL_THRESHOLD:
+                            print(f"🔴 BULK IMPORT: CRITICAL RAM {mem_percent:.1f}% - pausing downloads, forcing GC")
+                            force_garbage_collect("Bulk import critical RAM")
+                        else:
+                            print(f"⚠️ BULK IMPORT: RAM {mem_percent:.1f}% >= {BULK_MEMORY_PAUSE_THRESHOLD}% - pausing downloads")
+                        with bulk_import_lock:
+                            bulk_import_state['current_file'] = f'⏸️ RAM high ({mem_percent:.0f}%) - waiting for workers to free memory...'
+                            bulk_import_state['last_update'] = time.time()
+                    
+                    # Check disk space - pause if running low
+                    if resource_ok:
+                        try:
+                            disk_free_gb = psutil.disk_usage('/').free / (1024**3)
+                            if disk_free_gb < BULK_DISK_MIN_FREE_GB:
+                                resource_ok = False
+                                print(f"⚠️ BULK IMPORT: Disk space low ({disk_free_gb:.1f}GB free) - pausing downloads")
+                                with bulk_import_lock:
+                                    bulk_import_state['current_file'] = f'⏸️ Disk space low ({disk_free_gb:.1f}GB free) - waiting...'
+                                    bulk_import_state['last_update'] = time.time()
+                        except Exception:
+                            pass  # Skip disk check on error
+                    
+                    # Check CPU - pause if system is overloaded
+                    if resource_ok:
+                        try:
+                            cpu_percent = psutil.cpu_percent(interval=0)
+                            if cpu_percent >= BULK_CPU_PAUSE_THRESHOLD:
+                                resource_ok = False
+                                print(f"⚠️ BULK IMPORT: CPU {cpu_percent:.0f}% >= {BULK_CPU_PAUSE_THRESHOLD}% - pausing downloads")
+                                with bulk_import_lock:
+                                    bulk_import_state['current_file'] = f'⏸️ CPU high ({cpu_percent:.0f}%) - waiting for processing to finish...'
+                                    bulk_import_state['last_update'] = time.time()
+                        except Exception:
+                            pass  # Skip CPU check on error
+
+                    # DOWNLOAD LOGIC: Only download if buffer has room AND resources are OK
+                    if resource_ok and current_queue_size < BUFFER_SIZE and file_index < len(all_files):
                         # Calculate how many we can download
                         room_in_buffer = BUFFER_SIZE - current_queue_size
                         files_remaining = len(all_files) - file_index
@@ -6304,7 +6382,7 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                             batch_files = all_files[file_index:file_index + batch_size]
                             file_index += batch_size
 
-                            print(f"\n📥 Downloading {len(batch_files)} files (buffer: {current_queue_size}/{BUFFER_SIZE}, remaining: {files_remaining - batch_size})")
+                            print(f"\n📥 Downloading {len(batch_files)} files (buffer: {current_queue_size}/{BUFFER_SIZE}, remaining: {files_remaining - batch_size}) [RAM: {get_memory_percent():.0f}%]")
 
                             with bulk_import_lock:
                                 bulk_import_state['current_status'] = 'downloading'
@@ -6313,9 +6391,13 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                             with ThreadPoolExecutor(max_workers=download_threads) as batch_executor:
                                 futures = [batch_executor.submit(download_single_file, f) for f in batch_files]
                                 for future in as_completed(futures):
-                                    result = future.result()
-                                    if result.get('status') == 'stopped':
-                                        break
+                                    try:
+                                        result = future.result()
+                                        if result.get('status') == 'stopped':
+                                            break
+                                    except Exception as future_err:
+                                        print(f"⚠️ Download future error: {future_err}")
+                                        # Continue with other downloads - don't crash the pipeline
 
                             with bulk_import_lock:
                                 bulk_import_state['current_status'] = 'processing'
