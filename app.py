@@ -4953,7 +4953,7 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
     BUFFER_SIZE = 200  # Keep up to 200 tracks waiting to be processed
     DOWNLOAD_BATCH = 50  # Download this many at a time
     RESCAN_INTERVAL = 30  # Seconds to wait before rescanning for new files
-    MAX_EMPTY_SCANS = 0  # 0 = never stop (keep watching forever)
+    MAX_EMPTY_SCANS = 2  # Stop after N consecutive empty scans (0 = never stop)
     
     consecutive_empty_scans = 0
     total_processed_all_time = 0
@@ -5112,15 +5112,20 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                         bulk_import_state['current_status'] = 'complete'
                         bulk_import_state['active'] = False
                         bulk_import_state['last_update'] = time.time()
-                    print(f"📦 No files found after {consecutive_empty_scans} scans - stopping")
+                    print(f"\n{'='*60}")
+                    print(f"✅ BULK IMPORT COMPLETE - All files processed!")
+                    print(f"   Processed: {bulk_import_state.get('processed', 0)}")
+                    print(f"   Skipped: {bulk_import_state.get('skipped', 0)}")
+                    print(f"   Failed: {bulk_import_state.get('failed', 0)}")
+                    print(f"{'='*60}")
                     return
                 
                 with bulk_import_lock:
                     bulk_import_state['current_status'] = 'watching'
-                    bulk_import_state['current_file'] = f'👀 Watching for new files... (scan #{scan_count})'
+                    bulk_import_state['current_file'] = f'🔄 Verifying no remaining files... (check #{consecutive_empty_scans}/{MAX_EMPTY_SCANS})'
                     bulk_import_state['last_update'] = time.time()
                 
-                print(f"👀 Folder empty - watching for new files (rescan in {RESCAN_INTERVAL}s)...")
+                print(f"🔄 No files found (check {consecutive_empty_scans}/{MAX_EMPTY_SCANS}) - rechecking in {RESCAN_INTERVAL}s...")
                 time.sleep(RESCAN_INTERVAL)
                 continue  # Go back to start of while loop to rescan
             
@@ -5371,12 +5376,12 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                     if file_index >= len(all_files) and total_complete >= downloaded:
                         total_processed_all_time += bulk_import_state['processed']
                         print(f"\n✅ Batch complete! Total processed this session: {total_processed_all_time}")
-                        print(f"🔄 Will rescan for new files in {RESCAN_INTERVAL}s...")
+                        print(f"🔄 Rescanning folder to check for remaining files...")
 
                         # Reset batch counters but keep running
                         with bulk_import_lock:
                             bulk_import_state['current_status'] = 'watching'
-                            bulk_import_state['current_file'] = f'👀 Watching... (processed {total_processed_all_time} total)'
+                            bulk_import_state['current_file'] = f'🔄 Batch done ({total_processed_all_time} processed) - rescanning folder...'
                             bulk_import_state['last_update'] = time.time()
 
                         time.sleep(RESCAN_INTERVAL)

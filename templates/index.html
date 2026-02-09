@@ -2153,7 +2153,7 @@
                                 Import All
                             </button>
                         </div>
-                        <p class="dropbox-hint">Scan to preview files, or Import All to download and process entire folder</p>
+                        <p class="dropbox-hint">Browse or Scan to preview files, or Import All to download and process entire folder (stops when done)</p>
                     </div>
                     
                     <!-- Bulk Import Status Panel (minimal - main display is in sidebar) -->
@@ -2176,7 +2176,7 @@
                         </div>
                         <div id="bulkStats" style="margin-top: 8px; font-size: 12px; color: var(--text-muted);"></div>
                         <p style="margin-top: 12px; font-size: 11px; color: var(--text-muted);">
-                            💡 Status also visible in the sidebar. This import runs continuously until stopped.
+                            💡 Status also visible in the sidebar. Import will stop automatically when all files are processed.
                         </p>
                     </div>
                     
@@ -4375,7 +4375,7 @@
         async function startBulkImport() {
             const folderPath = document.getElementById('dropboxFolderPath').value.trim();
             
-            if (!confirm(`🚀 BULK IMPORT\n\nThis will import audio files from "${folderPath || 'your entire Dropbox'}":\n\n• Auto-SKIP banned tracks (Remix, Bootleg, Mashup, etc.)\n• Clean titles (replace DJ names → ID By Rivoli)\n• Process with all workers\n• DELETE from Dropbox when done\n\n⚠️ Files will be REMOVED from Dropbox!\n(Skipped + Processed = Deleted)\n\nContinue?`)) {
+            if (!confirm(`🚀 BULK IMPORT\n\nThis will import ALL audio files from "${folderPath || 'your entire Dropbox'}":\n\n• Downloads all MP3/WAV files from the folder\n• Processes each track through the normal workflow\n• Auto-SKIP banned tracks (Remix, Bootleg, Mashup, etc.)\n• Clean titles (replace DJ names → ID By Rivoli)\n• DELETE from Dropbox when done\n• Stops automatically when everything is processed\n\n⚠️ Files will be REMOVED from Dropbox after processing!\n\nContinue?`)) {
                 return;
             }
             
@@ -4481,10 +4481,10 @@
                     'downloading': `⬇️ Downloading... (buffer: ${queueSize}/200)`,
                     'separating': `🎵 Processing... (buffer: ${queueSize}/200)`,
                     'processing': `⚙️ Processing... (buffer: ${queueSize}/200)`,
-                    'watching': `👀 Watching for new files...`,
+                    'watching': `🔄 Verifying no remaining files...`,
                     'stopping': '⏸️ Stopping...',
                     'stopped': '⏹️ Stopped',
-                    'complete': `✅ Complete! ${data.processed || 0} processed`,
+                    'complete': `✅ Done! ${data.processed || 0} tracks processed`,
                     'error': '❌ Error'
                 };
                 statusEl.textContent = statusLabels[data.status] || data.status;
@@ -4551,7 +4551,8 @@
                     'scanning': '#f59e0b',
                     'downloading': '#6366f1',
                     'processing': '#8b5cf6',
-                    'watching': '#22c55e',
+                    'watching': '#f59e0b',
+                    'complete': '#22c55e',
                     'stopped': '#ef4444',
                     'error': '#ef4444'
                 };
@@ -4565,9 +4566,9 @@
                     'scanning': 'Scanning...',
                     'downloading': 'Downloading...',
                     'processing': 'Processing...',
-                    'watching': 'Watching for files...',
+                    'watching': 'Verifying...',
                     'stopped': 'Stopped',
-                    'complete': 'Complete',
+                    'complete': 'Done!',
                     'error': 'Error'
                 };
                 statusLabel.textContent = shortLabels[data.status] || data.status;
@@ -4587,7 +4588,9 @@
                 if (data.current_file) {
                     sidebarCurrentFile.textContent = data.current_file;
                 } else if (data.status === 'watching') {
-                    sidebarCurrentFile.textContent = '👀 Watching for new files...';
+                    sidebarCurrentFile.textContent = '🔄 Verifying completion...';
+                } else if (data.status === 'complete') {
+                    sidebarCurrentFile.textContent = `✅ All done! ${data.processed || 0} tracks processed`;
                 } else {
                     sidebarCurrentFile.textContent = 'Ready to import';
                 }
@@ -4612,12 +4615,18 @@
                             sidebarCard.style.display = 'none';
                             quickCard.style.display = 'block';
                         }, 3000);
+                    } else if (data.status === 'complete') {
+                        showToast(`✅ Bulk import complete! ${data.processed || 0} tracks processed, ${data.skipped || 0} skipped, ${data.failed || 0} failed`, 'success');
+                        // Keep card visible for a bit so user can see final stats
+                        setTimeout(() => {
+                            sidebarCard.style.display = 'none';
+                            quickCard.style.display = 'block';
+                        }, 10000);
                     } else if (data.status === 'error') {
                         showToast(`Bulk import error: ${data.error}`, 'error');
                     }
-                    // Note: Don't show "complete" toast for continuous mode - it keeps watching
                     
-                    // Keep polling less frequently
+                    // Stop polling
                     if (bulkImportPolling) {
                         clearInterval(bulkImportPolling);
                         bulkImportPolling = null;
