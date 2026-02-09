@@ -5633,7 +5633,7 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
     1. Scan Dropbox folder for files
     2. Download tracks in parallel (fill buffer up to BUFFER_SIZE)
     3. Workers process continuously from queue
-    4. Delete from Dropbox when processing succeeds
+    4. Move to /track done/ in Dropbox when processing succeeds
     5. When all done, wait and scan again for new files
     6. ONLY stops when manually interrupted or after consecutive empty scans
     
@@ -5966,8 +5966,8 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                         bulk_import_state['last_update'] = time.time()
                     return {'status': 'failed', 'name': file_name, 'error': str(e)}
 
-            def delete_from_dropbox_on_success(filename):
-                """Delete a file from Dropbox after successful processing."""
+            def move_to_done_in_dropbox(filename):
+                """Move a file to /track done folder in Dropbox after successful processing."""
                 with dropbox_paths_lock:
                     dropbox_path = dropbox_paths.get(filename)
 
@@ -5975,26 +5975,64 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                     return
 
                 try:
-                    delete_headers = {
+                    move_headers = {
                         'Authorization': f'Bearer {dropbox_token}',
                         'Content-Type': 'application/json'
                     }
                     if dropbox_team_member_id:
-                        delete_headers['Dropbox-API-Select-User'] = dropbox_team_member_id
+                        move_headers['Dropbox-API-Select-User'] = dropbox_team_member_id
                     if namespace_id:
-                        delete_headers['Dropbox-API-Path-Root'] = json.dumps({'.tag': 'namespace_id', 'namespace_id': namespace_id})
+                        move_headers['Dropbox-API-Path-Root'] = json.dumps({'.tag': 'namespace_id', 'namespace_id': namespace_id})
 
-                    requests.post(
-                        'https://api.dropboxapi.com/2/files/delete_v2',
-                        headers=delete_headers,
-                        json={'path': dropbox_path}
+                    # Move to /track done/ folder instead of deleting
+                    dest_filename = os.path.basename(dropbox_path)
+                    dest_path = f"/track done/{dest_filename}"
+
+                    response = requests.post(
+                        'https://api.dropboxapi.com/2/files/move_v2',
+                        headers=move_headers,
+                        json={
+                            'from_path': dropbox_path,
+                            'to_path': dest_path,
+                            'autorename': True,
+                            'allow_ownership_transfer': False
+                        }
                     )
-                    print(f"🗑️  Deleted from Dropbox: {filename}")
+                    if response.status_code == 200:
+                        print(f"📦  Moved to /track done/: {filename}")
+                    else:
+                        # If move fails (e.g. folder doesn't exist), try creating it first
+                        error_data = response.json() if response.text else {}
+                        error_summary = error_data.get('error_summary', '')
+                        if 'not_found' in error_summary:
+                            # Create the /track done/ folder
+                            requests.post(
+                                'https://api.dropboxapi.com/2/files/create_folder_v2',
+                                headers=move_headers,
+                                json={'path': '/track done', 'autorename': False}
+                            )
+                            # Retry the move
+                            retry_response = requests.post(
+                                'https://api.dropboxapi.com/2/files/move_v2',
+                                headers=move_headers,
+                                json={
+                                    'from_path': dropbox_path,
+                                    'to_path': dest_path,
+                                    'autorename': True,
+                                    'allow_ownership_transfer': False
+                                }
+                            )
+                            if retry_response.status_code == 200:
+                                print(f"📦  Moved to /track done/: {filename}")
+                            else:
+                                print(f"⚠️  Could not move to /track done/: {retry_response.text[:200]}")
+                        else:
+                            print(f"⚠️  Could not move to /track done/: {error_summary}")
                 except Exception as e:
-                    print(f"⚠️  Could not delete from Dropbox: {e}")
+                    print(f"⚠️  Could not move to /track done/: {e}")
 
             def check_completed_tracks():
-                """Check for completed tracks and delete from Dropbox."""
+                """Check for completed tracks and move to /track done/ in Dropbox."""
                 with dropbox_paths_lock:
                     filenames_to_check = list(dropbox_paths.keys())
 
@@ -6016,7 +6054,7 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                                         bulk_import_state['processed'] += 1
                                         bulk_import_state['completed_files'].append(filename)
                                         bulk_import_state['last_update'] = time.time()
-                                    delete_from_dropbox_on_success(filename)
+                                    move_to_done_in_dropbox(filename)
 
                         elif status == 'failed':
                             with completed_lock:
@@ -6050,7 +6088,7 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                     # Get current queue size (waiting + processing)
                     current_queue_size = get_queue_size()
 
-                    # Check completed tracks and delete from Dropbox
+                    # Check completed tracks and move to /track done/ in Dropbox
                     check_completed_tracks()
 
                     # Update status display
