@@ -1158,6 +1158,184 @@
             color: var(--error);
         }
 
+        /* Live Logs Terminal */
+        .live-logs-card {
+            margin-top: 0;
+        }
+
+        .live-logs-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .live-logs-header-left {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .live-logs-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: 9999px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .live-logs-badge.live {
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--success);
+        }
+
+        .live-logs-badge .pulse-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--success);
+            animation: pulse-dot 1.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.8); }
+        }
+
+        .live-logs-controls {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .live-logs-controls .btn {
+            padding: 4px 8px;
+            font-size: 11px;
+        }
+
+        .live-logs-terminal {
+            background: #0d1117;
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: var(--radius-sm);
+            padding: 0;
+            max-height: 400px;
+            min-height: 200px;
+            overflow-y: auto;
+            font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+            font-size: 11.5px;
+            line-height: 1.7;
+            scroll-behavior: smooth;
+        }
+
+        .live-logs-terminal::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .live-logs-terminal::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .live-logs-terminal::-webkit-scrollbar-thumb {
+            background: rgba(255,255,255,0.1);
+            border-radius: 3px;
+        }
+
+        .live-log-line {
+            padding: 1px 12px;
+            border-bottom: 1px solid rgba(255,255,255,0.02);
+            word-break: break-all;
+            white-space: pre-wrap;
+            color: #8b949e;
+        }
+
+        .live-log-line:hover {
+            background: rgba(255,255,255,0.03);
+        }
+
+        .live-log-line .log-time {
+            color: #484f58;
+            margin-right: 6px;
+            user-select: none;
+        }
+
+        /* Log line color coding */
+        .live-log-line.log-success {
+            color: #3fb950;
+        }
+
+        .live-log-line.log-error {
+            color: #f85149;
+            background: rgba(248, 81, 73, 0.05);
+        }
+
+        .live-log-line.log-warning {
+            color: #d29922;
+        }
+
+        .live-log-line.log-info {
+            color: #58a6ff;
+        }
+
+        .live-log-line.log-gpu {
+            color: #bc8cff;
+        }
+
+        .live-log-line.log-memory {
+            color: #f0883e;
+        }
+
+        .live-logs-status-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 12px;
+            background: rgba(255,255,255,0.02);
+            border-top: 1px solid rgba(255,255,255,0.06);
+            font-size: 10px;
+            color: #484f58;
+            font-family: 'SF Mono', monospace;
+        }
+
+        .live-logs-status-bar .status-items {
+            display: flex;
+            gap: 12px;
+        }
+
+        .live-logs-filter {
+            display: flex;
+            gap: 4px;
+            padding: 8px 12px 4px;
+            background: #0d1117;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+        }
+
+        .filter-chip {
+            padding: 2px 8px;
+            border-radius: 9999px;
+            font-size: 10px;
+            font-weight: 500;
+            cursor: pointer;
+            border: 1px solid rgba(255,255,255,0.1);
+            background: transparent;
+            color: #8b949e;
+            transition: all 0.15s;
+        }
+
+        .filter-chip:hover {
+            border-color: rgba(255,255,255,0.2);
+            color: #c9d1d9;
+        }
+
+        .filter-chip.active {
+            background: rgba(88, 166, 255, 0.15);
+            border-color: rgba(88, 166, 255, 0.3);
+            color: #58a6ff;
+        }
+
         /* Scrollbar */
         ::-webkit-scrollbar {
             width: 6px;
@@ -2026,6 +2204,55 @@
                                 <div class="stat-box-value" id="throughput">--</div>
                                 <div class="stat-box-sub">tracks/min</div>
                             </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Live Logs -->
+                <div class="card live-logs-card">
+                    <div class="card-header">
+                        <div class="live-logs-header">
+                            <div class="live-logs-header-left">
+                                <div class="card-title">
+                                    <i data-lucide="terminal"></i>
+                                    Live Logs
+                                </div>
+                                <span class="live-logs-badge live" id="logsLiveBadge">
+                                    <span class="pulse-dot"></span>
+                                    LIVE
+                                </span>
+                            </div>
+                            <div class="live-logs-controls">
+                                <button class="btn btn-ghost" onclick="toggleLogsAutoScroll()" id="autoScrollBtn" title="Auto-scroll">
+                                    <i data-lucide="arrow-down-to-line"></i>
+                                </button>
+                                <button class="btn btn-ghost" onclick="clearLogsPanel()" title="Clear">
+                                    <i data-lucide="trash-2"></i>
+                                </button>
+                                <button class="btn btn-ghost" onclick="toggleLogsExpand()" id="expandLogsBtn" title="Expand/Collapse">
+                                    <i data-lucide="maximize-2"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card-body" style="padding: 0;">
+                        <div class="live-logs-filter" id="logsFilter">
+                            <button class="filter-chip active" data-filter="all" onclick="setLogFilter('all', this)">All</button>
+                            <button class="filter-chip" data-filter="error" onclick="setLogFilter('error', this)">Errors</button>
+                            <button class="filter-chip" data-filter="warning" onclick="setLogFilter('warning', this)">Warnings</button>
+                            <button class="filter-chip" data-filter="success" onclick="setLogFilter('success', this)">Success</button>
+                            <button class="filter-chip" data-filter="gpu" onclick="setLogFilter('gpu', this)">GPU</button>
+                            <button class="filter-chip" data-filter="memory" onclick="setLogFilter('memory', this)">Memory</button>
+                        </div>
+                        <div class="live-logs-terminal" id="liveLogsTerminal"></div>
+                        <div class="live-logs-status-bar">
+                            <div class="status-items">
+                                <span id="logsCount">0 lines</span>
+                                <span id="logsCpu">CPU: --%</span>
+                                <span id="logsMem">RAM: --%</span>
+                                <span id="logsQueue">Queue: 0</span>
+                            </div>
+                            <span id="logsUpdated">--</span>
                         </div>
                     </div>
                 </div>
@@ -4649,6 +4876,21 @@
             startStatsPolling();
             console.log('✅ Main polling started');
             
+            // Live logs: auto-disable scroll when user scrolls up
+            const logsTerminal = document.getElementById('liveLogsTerminal');
+            if (logsTerminal) {
+                logsTerminal.addEventListener('scroll', function() {
+                    const atBottom = logsTerminal.scrollHeight - logsTerminal.scrollTop - logsTerminal.clientHeight < 40;
+                    if (!atBottom && logsAutoScroll) {
+                        logsAutoScroll = false;
+                        document.getElementById('autoScrollBtn').style.opacity = '0.4';
+                    } else if (atBottom && !logsAutoScroll) {
+                        logsAutoScroll = true;
+                        document.getElementById('autoScrollBtn').style.opacity = '1';
+                    }
+                });
+            }
+            
             // Check bulk import status on load
             fetch('/dropbox/bulk_import/status')
                 .then(r => r.json())
@@ -4858,6 +5100,126 @@
                 }
             }, 1000);
         }
+
+        // ===== LIVE LOGS =====
+        
+        let logsAutoScroll = true;
+        let logsExpanded = false;
+        let logsSinceIndex = 0;
+        let logsFilter = 'all';
+        let logsInterval = null;
+        let allLogLines = [];
+        const MAX_LOG_LINES = 500;
+
+        function classifyLogLine(text) {
+            const lower = text.toLowerCase();
+            if (lower.includes('❌') || lower.includes('error') || lower.includes('failed') || lower.includes('crash')) return 'log-error';
+            if (lower.includes('⚠️') || lower.includes('warning') || lower.includes('timeout') || lower.includes('⚠')) return 'log-warning';
+            if (lower.includes('✅') || lower.includes('terminé') || lower.includes('success') || lower.includes('completed')) return 'log-success';
+            if (lower.includes('gpu') || lower.includes('cuda') || lower.includes('🚀') || lower.includes('vram')) return 'log-gpu';
+            if (lower.includes('memory') || lower.includes('ram') || lower.includes('gc') || lower.includes('🧹') || lower.includes('watchdog')) return 'log-memory';
+            if (lower.includes('🎵') || lower.includes('séparation') || lower.includes('demucs')) return 'log-info';
+            return '';
+        }
+
+        function getLogCategory(cls) {
+            if (cls.includes('error')) return 'error';
+            if (cls.includes('warning')) return 'warning';
+            if (cls.includes('success')) return 'success';
+            if (cls.includes('gpu')) return 'gpu';
+            if (cls.includes('memory')) return 'memory';
+            return 'other';
+        }
+
+        function setLogFilter(filter, btn) {
+            logsFilter = filter;
+            document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+            btn.classList.add('active');
+            renderLogLines();
+        }
+
+        function renderLogLines() {
+            const terminal = document.getElementById('liveLogsTerminal');
+            const filtered = logsFilter === 'all' 
+                ? allLogLines 
+                : allLogLines.filter(l => getLogCategory(l.cls) === logsFilter);
+            
+            terminal.innerHTML = filtered.map(l => 
+                `<div class="live-log-line ${l.cls}">${escapeHtml(l.text)}</div>`
+            ).join('');
+
+            if (logsAutoScroll) {
+                terminal.scrollTop = terminal.scrollHeight;
+            }
+        }
+
+        async function fetchLiveLogs() {
+            try {
+                const res = await fetch(`/api/live_logs?since=${logsSinceIndex}&limit=100`);
+                const data = await res.json();
+
+                if (data.logs && data.logs.length > 0) {
+                    data.logs.forEach(line => {
+                        allLogLines.push({
+                            text: line,
+                            cls: classifyLogLine(line)
+                        });
+                    });
+
+                    // Cap stored lines
+                    if (allLogLines.length > MAX_LOG_LINES) {
+                        allLogLines = allLogLines.slice(-MAX_LOG_LINES);
+                    }
+
+                    logsSinceIndex = data.total;
+                    renderLogLines();
+                }
+
+                // Update status bar
+                document.getElementById('logsCount').textContent = `${allLogLines.length} lines`;
+                document.getElementById('logsCpu').textContent = `CPU: ${data.cpu_percent}%`;
+                document.getElementById('logsMem').textContent = `RAM: ${data.mem_percent}%`;
+                document.getElementById('logsQueue').textContent = `Queue: ${data.queue_size}`;
+                document.getElementById('logsUpdated').textContent = new Date().toLocaleTimeString();
+
+            } catch (e) {
+                // Silently ignore fetch errors
+            }
+        }
+
+        function toggleLogsAutoScroll() {
+            logsAutoScroll = !logsAutoScroll;
+            const btn = document.getElementById('autoScrollBtn');
+            btn.style.opacity = logsAutoScroll ? '1' : '0.4';
+            if (logsAutoScroll) {
+                const terminal = document.getElementById('liveLogsTerminal');
+                terminal.scrollTop = terminal.scrollHeight;
+            }
+        }
+
+        function clearLogsPanel() {
+            allLogLines = [];
+            document.getElementById('liveLogsTerminal').innerHTML = '';
+            document.getElementById('logsCount').textContent = '0 lines';
+        }
+
+        function toggleLogsExpand() {
+            logsExpanded = !logsExpanded;
+            const terminal = document.getElementById('liveLogsTerminal');
+            terminal.style.maxHeight = logsExpanded ? '800px' : '400px';
+            terminal.style.minHeight = logsExpanded ? '500px' : '200px';
+        }
+
+        // Start live logs polling
+        function startLogsPolling() {
+            if (logsInterval) return;
+            fetchLiveLogs(); // Initial fetch
+            logsInterval = setInterval(fetchLiveLogs, 2000); // Poll every 2s
+        }
+
+        // Auto-start logs polling on page load
+        startLogsPolling();
+
     </script>
 </body>
 </html>

@@ -4,6 +4,72 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
+# =============================================================================
+# FIX TORCHAUDIO: Patch torchcodec ImportError at startup
+# torchaudio >= 2.5 requires torchcodec but demucs doesn't install it.
+# This patches the torchaudio module on disk so ALL processes (including
+# subprocess calls like `python3 -m demucs`) use soundfile as fallback.
+# =============================================================================
+def _patch_torchaudio_on_disk():
+    """Patch torchaudio's _torchcodec.py to fall back to soundfile."""
+    try:
+        import torchaudio
+        tc_path = os.path.join(os.path.dirname(torchaudio.__file__), '_torchcodec.py')
+        if not os.path.exists(tc_path):
+            return
+        with open(tc_path, 'r') as f:
+            content = f.read()
+        if 'PATCHED_BY_IDBYRIVOLI' in content:
+            return  # Already patched
+        if 'raise ImportError' not in content:
+            return  # No issue to fix
+        
+        # Replace the raise ImportError with a soundfile fallback
+        lines = content.split('\n')
+        new_lines = []
+        i = 0
+        patched = False
+        while i < len(lines):
+            line = lines[i]
+            if 'raise ImportError' in line and 'torchcodec' in content.lower() and not patched:
+                indent = len(line) - len(line.lstrip())
+                spaces = ' ' * indent
+                # Skip the raise statement (may span multiple lines with parentheses)
+                paren_depth = line.count('(') - line.count(')')
+                i += 1
+                while i < len(lines) and paren_depth > 0:
+                    paren_depth += lines[i].count('(') - lines[i].count(')')
+                    i += 1
+                # Insert soundfile fallback
+                new_lines.append(f'{spaces}# PATCHED_BY_IDBYRIVOLI: Fall back to soundfile instead of crashing')
+                new_lines.append(f'{spaces}import soundfile as _sf')
+                new_lines.append(f'{spaces}import torch as _torch')
+                new_lines.append(f'{spaces}_data, _sr = _sf.read(str(uri), dtype="float32")')
+                new_lines.append(f'{spaces}if _data.ndim == 1:')
+                new_lines.append(f'{spaces}    return _torch.from_numpy(_data).unsqueeze(0), _sr')
+                new_lines.append(f'{spaces}else:')
+                new_lines.append(f'{spaces}    return _torch.from_numpy(_data.T), _sr')
+                patched = True
+            else:
+                new_lines.append(line)
+                i += 1
+        
+        if patched:
+            with open(tc_path, 'w') as f:
+                f.write('\n'.join(new_lines))
+            print(f"✅ Auto-patched torchaudio: {tc_path}")
+            print(f"   torchcodec ImportError will no longer crash Demucs")
+        else:
+            print(f"⚠️ Could not auto-patch torchaudio. Run: pip install torchcodec")
+    except ImportError:
+        pass  # torchaudio not installed, no patch needed
+    except PermissionError:
+        print(f"⚠️ Cannot patch torchaudio (permission denied). Run: pip install torchcodec")
+    except Exception as e:
+        print(f"⚠️ torchaudio patch failed: {e}")
+
+_patch_torchaudio_on_disk()
+
 import subprocess
 import threading
 import shutil
@@ -2261,29 +2327,21 @@ def run_demucs_thread(filepaths, original_filenames):
             # Re-check CUDA before batch (may have become available after startup)
             ensure_cuda_device()
             
+            # CRITICAL: -j controls CPU threads PER Demucs process
+            # Batch mode runs chunks sequentially (1 Demucs process at a time)
+            # so we can use more jobs here than in parallel worker mode
             if DEMUCS_DEVICE == 'cuda':
-                try:
-                    import torch
-                    gpu_mem_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-                    ram_gb = psutil.virtual_memory().total / (1024**3)
-                    
-                    if gpu_mem_gb >= 70 and ram_gb >= 200:
-                        batch_jobs = 20  # Maximum for H100 + high RAM
-                    elif gpu_mem_gb >= 70:
-                        batch_jobs = 16
-                    elif gpu_mem_gb >= 40:
-                        batch_jobs = 12
-                    else:
-                        batch_jobs = 8
-                except:
-                    batch_jobs = 8
+                # In batch mode, only 1 Demucs process runs at a time
+                # So we can safely use more CPU threads
+                batch_jobs = max(2, CPU_COUNT // 2)
             else:
-                # CPU MODE: Keep jobs LOW to avoid 100% CPU / OOM crash
-                batch_jobs = max(1, min(2, CPU_COUNT // 4))
+                batch_jobs = max(1, CPU_COUNT // 2)
                 log_message(f"⚠️ Batch Demucs on CPU with {batch_jobs} job(s) - GPU recommended!")
             
+            # Use demucs_runner.py wrapper to fix torchaudio/torchcodec compatibility
+            DEMUCS_RUNNER = os.path.join(BASE_DIR, 'demucs_runner.py')
             command = [
-                'python3', '-m', 'demucs',
+                'python3', DEMUCS_RUNNER,
                 '--two-stems=vocals',
                 '-n', 'htdemucs',
                 '--mp3',
@@ -3637,32 +3695,24 @@ def process_single_track(filepath, filename, session_id='global', worker_id=None
                 # - Maximum -j jobs (GPU has plenty of VRAM)
                 # - Max segment size for htdemucs
                 # - Minimal overlap for maximum speed
+                # CRITICAL: -j (jobs) controls CPU threads PER worker process.
+                # Total CPU threads = NUM_WORKERS × jobs. Must not exceed CPU_COUNT!
+                # Example: 16 workers × 20 jobs = 320 threads on 20 CPUs = 98% CPU = crash
+                # Correct: 16 workers × 1 job = 16 threads on 20 CPUs = healthy
                 if device == 'cuda':
-                    try:
-                        import torch
-                        gpu_mem_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-                        ram_gb = psutil.virtual_memory().total / (1024**3)
-                        
-                        # H100 + 240GB RAM: Maximum parallelism
-                        if gpu_mem_gb >= 70 and ram_gb >= 200:
-                            jobs = 20  # Maximum for H100 with high RAM
-                        elif gpu_mem_gb >= 70:
-                            jobs = 16
-                        elif gpu_mem_gb >= 40:
-                            jobs = 12
-                        else:
-                            jobs = 8
-                    except:
-                        jobs = 8
+                    # GPU mode: GPU inference is fast, but -j controls CPU data loading threads
+                    # Keep total CPU threads <= CPU_COUNT to avoid CPU bottleneck
+                    jobs = max(1, CPU_COUNT // max(NUM_WORKERS, 1))
+                    log_message(f"🚀 GPU mode: {jobs} job(s) per worker × {NUM_WORKERS} workers = {jobs * NUM_WORKERS} total CPU threads (CPUs: {CPU_COUNT})")
                 else:
-                    # CPU MODE: Keep jobs LOW to avoid 100% CPU / OOM crash
-                    # Each Demucs job on CPU uses significant RAM + all CPU cores
-                    # With multiple workers already running, keep this minimal
-                    jobs = max(1, min(2, CPU_COUNT // 4))
-                    log_message(f"⚠️ Running Demucs on CPU with {jobs} job(s) - GPU would be 10x faster!")
+                    # CPU MODE: Each job is 100% CPU-bound, keep very low
+                    jobs = max(1, CPU_COUNT // max(NUM_WORKERS * 2, 1))
+                    log_message(f"⚠️ CPU mode: {jobs} job(s) per worker × {NUM_WORKERS} workers")
                 
+                # Use demucs_runner.py wrapper to fix torchaudio/torchcodec compatibility
+                DEMUCS_RUNNER = os.path.join(BASE_DIR, 'demucs_runner.py')
                 cmd = [
-                    'python3', '-m', 'demucs',
+                    'python3', DEMUCS_RUNNER,
                     '--two-stems=vocals',
                     '-n', 'htdemucs',
                     '--mp3',
@@ -5410,8 +5460,10 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                 try:
                     # Prepare filename
                     cleaned_title = title_result['cleaned_title']
-                    extension = os.path.splitext(file_name)[1]
-                    safe_filename = re.sub(r'[^\w\s\-\.]', '', cleaned_title).strip() or f'track_{current_index}'
+                    extension = os.path.splitext(file_name)[1]  # e.g. ".mp3"
+                    # Remove extension from cleaned_title if already present (prevents .mp3.mp3)
+                    cleaned_title_no_ext = os.path.splitext(cleaned_title)[0] if cleaned_title.lower().endswith(extension.lower()) else cleaned_title
+                    safe_filename = re.sub(r'[^\w\s\-\.]', '', cleaned_title_no_ext).strip() or f'track_{current_index}'
                     safe_filename = safe_filename + extension
                     local_path = os.path.join(UPLOAD_FOLDER, safe_filename)
 
@@ -6215,6 +6267,46 @@ def dropbox_get_namespaces():
         print(f"❌ Error getting namespaces: {str(e)}")
         print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/live_logs')
+def live_logs():
+    """Returns recent log lines for the live logs panel in the UI."""
+    session_id = request.args.get('session_id') or get_session_id()
+    since_index = request.args.get('since', 0, type=int)
+    limit = request.args.get('limit', 100, type=int)
+    
+    current_status = get_job_status(session_id)
+    all_logs = current_status.get('logs', [])
+    
+    # Also include global logs for system-wide messages
+    global_logs = job_status.get('logs', [])
+    
+    # Merge and deduplicate (global logs may overlap with session logs)
+    # Use global logs as the comprehensive source
+    logs = global_logs
+    
+    total = len(logs)
+    
+    # If since_index is provided, return only new logs since that index
+    if since_index > 0 and since_index < total:
+        new_logs = logs[since_index:]
+    else:
+        new_logs = logs[-limit:]
+    
+    # Add memory/CPU context to response
+    mem_percent = get_memory_percent()
+    cpu_percent = psutil.cpu_percent(interval=0)
+    
+    return jsonify({
+        'logs': new_logs,
+        'total': total,
+        'since': since_index,
+        'mem_percent': round(mem_percent, 1),
+        'cpu_percent': round(cpu_percent, 1),
+        'queue_size': track_queue.qsize(),
+        'active_workers': sum(1 for t in worker_threads if t.is_alive()),
+    })
 
 
 @app.route('/status')
