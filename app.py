@@ -674,17 +674,47 @@ HISTORY_FILE = os.path.join(BASE_DIR, 'upload_history.csv')
 
 def detect_track_type_from_title(title):
     """
-    Detect if track title contains Instrumental, Extended, or Acapella.
-    Returns the detected type or None if regular track.
+    Detect track type from title/filename.
+    Returns the detected type string or None if regular track.
     Case-insensitive matching.
+    
+    Detected types (mapped to database fields via TYPE_TO_FILE_FIELD_MAP):
+    - 'Instrumental' → instru
+    - 'Acapella' → acapella
+    - 'Extended' → extendedTrackMp3
+    - 'Original Clean' → originalTrackMp3Clean
+    - 'Original Dirty' → originalTrackMp3Dirty
+    - 'Intro' → intro
     """
     if not title:
         return None
     
     title_lower = title.lower()
     
-    # Check for specific keywords
-    if 'instrumental' in title_lower:
+    # === Parenthetical markers (most specific, check first) ===
+    
+    # (Inst) or (Instrumental) - short form common in DJ City files
+    if re.search(r'\(\s*inst(?:rumental)?\s*\)', title_lower):
+        return 'Instrumental'
+    
+    # (Intro), (Djcity Intro), (XXX Intro), (XXX Intro - Clean), (XXX Intro - Dirty)
+    if re.search(r'\(\s*(?:[\w\s]*\s+)?intro(?:\s*-\s*(?:clean|dirty))?\s*\)', title_lower):
+        return 'Intro'
+    
+    # (Djcity Intro - Clean) or (Djcity Intro - Dirty) without parentheses wrapping
+    if re.search(r'intro\s*-\s*(?:clean|dirty)', title_lower):
+        return 'Intro'
+    
+    # (Clean) - standalone clean version marker
+    if re.search(r'\(\s*clean\s*\)', title_lower):
+        return 'Original Clean'
+    
+    # (Dirty) - standalone dirty version marker
+    if re.search(r'\(\s*dirty\s*\)', title_lower):
+        return 'Original Dirty'
+    
+    # === General keywords (less specific) ===
+    if 'instrumental' in title_lower or '(inst)' in title_lower:
         return 'Instrumental'
     elif 'acapella' in title_lower or 'a capella' in title_lower or 'acappella' in title_lower:
         return 'Acapella'
@@ -692,6 +722,210 @@ def detect_track_type_from_title(title):
         return 'Extended'
     
     return None
+
+
+def extract_bpm_from_filename(filename):
+    """
+    Extract BPM from trailing number in filename (before extension).
+    DJ City files have format: 'Artist - Title (Version) BPM.mp3'
+    
+    Examples:
+    - 'A-Trak - Bubble Guts - Braxe & Falcon Remix 122.mp3' → 122
+    - 'Akon Ft. John Mamann - Tt Freak (Clean) 123.mp3' → 123
+    - 'Alcyone - Trompeta Y Fiesta - Luis R 100-130 Transition 130.mp3' → 130
+    
+    Returns BPM as int, or None if not found.
+    """
+    # Remove extension
+    name = os.path.splitext(filename)[0]
+    # Match trailing 2-3 digit number (BPM typically 60-200)
+    match = re.search(r'(\d{2,3})\s*$', name)
+    if match:
+        bpm = int(match.group(1))
+        if 60 <= bpm <= 200:
+            return bpm
+    return None
+
+
+def clean_detected_type_from_title(title, detected_type=None):
+    """
+    Remove detected type markers and version info from title for use as base name.
+    Called after detect_track_type_from_title() to strip type-related content.
+    
+    Removes:
+    - (Clean), (Dirty), (Inst), (Instrumental)
+    - (Djcity Intro), (XXX Intro), (Intro - Clean), (Intro - Dirty)
+    - Trailing BPM numbers
+    - Artist name (everything before first " - ")
+    - Remixer/DJ edit sections after second " - " when they contain known edit keywords
+    
+    Examples:
+    - 'Akon Ft. John Mamann - Tt Freak (Clean) 123' → 'Tt Freak'
+    - 'Alcyone - Trompeta Y Fiesta (Djcity Intro) 130' → 'Trompeta Y Fiesta'
+    - 'Bad Bunny - Party - Rob Dvs Hip Hop Hype Intro (Dirty) 100' → 'Party'
+    """
+    if not title:
+        return title
+    
+    cleaned = title
+    
+    # Remove file extension if present
+    cleaned = re.sub(r'\.(mp3|wav|flac|aac|ogg|m4a)$', '', cleaned, flags=re.IGNORECASE)
+    
+    # Remove trailing BPM number (2-3 digits at end)
+    cleaned = re.sub(r'\s+\d{2,3}\s*$', '', cleaned)
+    
+    # Remove parenthetical version/type markers
+    # (Clean), (Dirty), (Inst), (Instrumental)
+    cleaned = re.sub(r'\s*\(\s*(?:clean|dirty|inst(?:rumental)?)\s*\)', '', cleaned, flags=re.IGNORECASE)
+    
+    # (Djcity Intro - Clean), (Djcity Intro - Dirty), (Djcity Intro), (XXX Intro), (Intro)
+    cleaned = re.sub(r'\s*\(\s*(?:[\w\s]*\s+)?intro(?:\s*-\s*(?:clean|dirty))?\s*\)', '', cleaned, flags=re.IGNORECASE)
+    
+    # Remove artist name (everything before first " - ")
+    if ' - ' in cleaned:
+        parts = cleaned.split(' - ', 1)
+        if len(parts) > 1:
+            cleaned = parts[1]
+    
+    # Remove remixer/DJ edit section (content after last " - " containing edit keywords)
+    # e.g., "Tt Freak - Rob Dvs Hip Hop Hype Intro" → "Tt Freak"
+    edit_keywords = [
+        'remix', 'edit', 'intro', 'outro', 'transition', 'hype', 'club',
+        'bootleg', 'mashup', 'blend', 'rework', 'redrum', 'flip',
+        'version', 'mix', 'dub', 'vip', 'break intro', 'slam'
+    ]
+    if ' - ' in cleaned:
+        parts = cleaned.rsplit(' - ', 1)
+        if len(parts) == 2:
+            after_dash = parts[1].lower()
+            # Check if the part after the last " - " contains an edit keyword
+            for keyword in edit_keywords:
+                if keyword in after_dash:
+                    cleaned = parts[0]
+                    break
+    
+    # Clean up whitespace
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    
+    return cleaned
+
+
+# =============================================================================
+# DEEZER API - Metadata & Cover Art Lookup
+# =============================================================================
+
+def search_deezer_metadata(artist, title, timeout=10):
+    """
+    Search Deezer API for track metadata: ISRC, BPM, key, genre, label, album,
+    release date, and cover art URL.
+    
+    Uses two API calls:
+      1. /search?q=artist:"X" track:"Y"  → find the Deezer track ID
+      2. /track/{id}                      → get full details (ISRC, BPM, etc.)
+    
+    Returns dict with all found metadata, or empty dict on failure.
+    Free API, no auth needed, rate limit ~50 req/5s.
+    """
+    import requests as _req
+
+    result = {
+        'deezer_id': None,
+        'isrc': '',
+        'bpm': None,
+        'title': '',
+        'artist': '',
+        'album': '',
+        'label': '',
+        'release_date': '',
+        'genre': '',
+        'cover_url': '',          # album.cover_xl (1000×1000)
+        'cover_url_medium': '',   # album.cover_big (500×500)
+        'duration': None,
+        'explicit': False,
+        'deezer_link': '',
+    }
+
+    if not artist or not title:
+        return result
+
+    # Clean search terms - remove feat/ft. for better matching
+    clean_artist = re.sub(r'\s*(feat\.?|ft\.?|featuring)\s+.*$', '', artist, flags=re.IGNORECASE).strip()
+    clean_title = re.sub(r'\s*\(.*?\)', '', title).strip()  # remove parenthetical markers
+    clean_title = re.sub(r'\s*-\s*$', '', clean_title).strip()
+
+    try:
+        # Step 1: Search for the track
+        search_url = 'https://api.deezer.com/search'
+        params = {'q': f'artist:"{clean_artist}" track:"{clean_title}"', 'limit': 5}
+        resp = _req.get(search_url, params=params, timeout=timeout)
+
+        if resp.status_code != 200:
+            return result
+
+        data = resp.json()
+        tracks = data.get('data', [])
+
+        if not tracks:
+            # Fallback: simpler search without strict artist/track syntax
+            params = {'q': f'{clean_artist} {clean_title}', 'limit': 5}
+            resp = _req.get(search_url, params=params, timeout=timeout)
+            if resp.status_code == 200:
+                tracks = resp.json().get('data', [])
+
+        if not tracks:
+            return result
+
+        # Pick best match (first result is usually best; Deezer ranks by relevance)
+        track = tracks[0]
+        deezer_id = track.get('id')
+        result['deezer_id'] = deezer_id
+        result['title'] = track.get('title', '')
+        result['artist'] = track.get('artist', {}).get('name', '')
+        result['album'] = track.get('album', {}).get('title', '')
+        result['cover_url'] = track.get('album', {}).get('cover_xl', '')
+        result['cover_url_medium'] = track.get('album', {}).get('cover_big', '')
+        result['duration'] = track.get('duration')
+        result['explicit'] = track.get('explicit_lyrics', False)
+        result['deezer_link'] = track.get('link', '')
+
+        # Step 2: Get full track details (ISRC, BPM, label, genre, release date)
+        if deezer_id:
+            detail_resp = _req.get(f'https://api.deezer.com/track/{deezer_id}', timeout=timeout)
+            if detail_resp.status_code == 200:
+                detail = detail_resp.json()
+
+                result['isrc'] = detail.get('isrc', '')
+                result['bpm'] = detail.get('bpm') if detail.get('bpm') and detail.get('bpm') > 0 else None
+
+                # Album-level details
+                album_data = detail.get('album', {})
+                if album_data:
+                    result['label'] = album_data.get('label', '')
+                    result['release_date'] = album_data.get('release_date', '')
+                    if not result['cover_url']:
+                        result['cover_url'] = album_data.get('cover_xl', '')
+                    if not result['cover_url_medium']:
+                        result['cover_url_medium'] = album_data.get('cover_big', '')
+
+                    # Genre from album
+                    genres = album_data.get('genres', {}).get('data', [])
+                    if genres:
+                        result['genre'] = genres[0].get('name', '')
+
+    except Exception as e:
+        print(f"   ⚠️ Deezer API error: {e}")
+
+    return result
+
+
+def get_deezer_cover_url(artist, title, timeout=10):
+    """
+    Quick helper: just get the cover art URL from Deezer.
+    Returns the cover_xl URL (1000×1000) or empty string.
+    """
+    meta = search_deezer_metadata(artist, title, timeout=timeout)
+    return meta.get('cover_url', '')
 
 
 # =============================================================================
@@ -765,6 +999,7 @@ FORMAT_MAPPINGS = {
     'a cappella': 'Acapella',
     'a capella': 'Acapella',
     'acappella': 'Acapella',
+    'inst': 'Instrumental',
 }
 
 # Track types/versions to generate
@@ -987,6 +1222,11 @@ def extract_track_metadata(title):
     bpm_match = re.search(r'(\d{2,3})\s*bpm', title_lower)
     if bpm_match:
         metadata['bpm'] = int(bpm_match.group(1))
+    
+    # Fallback: extract BPM from trailing number in title/filename
+    # DJ City files have format: 'Artist - Title (Version) BPM.mp3'
+    if metadata['bpm'] is None:
+        metadata['bpm'] = extract_bpm_from_filename(title)
     
     return metadata
 
@@ -1948,6 +2188,57 @@ def prepare_track_metadata(edit_info, original_path, bpm, base_url=""):
         if not original_cover_found:
             print(f"   ⚠️ Pas de cover originale trouvée, utilisation cover ID By Rivoli")
         
+        # ─── Deezer API: enrich metadata (ISRC, BPM, album, label, genre, cover) ───
+        search_artist = artist if artist != 'Unknown' else ''
+        search_title = clean_detected_type_from_title(edit_info.get('name', '') or os.path.basename(original_path))
+        
+        try:
+            print(f"   🔍 Searching Deezer: '{search_artist}' - '{search_title}'")
+            deezer_meta = search_deezer_metadata(search_artist, search_title)
+            if deezer_meta.get('deezer_id'):
+                print(f"   ✅ Deezer match: {deezer_meta.get('artist')} - {deezer_meta.get('title')} (ISRC: {deezer_meta.get('isrc', 'N/A')})")
+                
+                # Fill missing fields from Deezer (ID3 tags take priority)
+                if not isrc and deezer_meta.get('isrc'):
+                    isrc = deezer_meta['isrc']
+                    print(f"   📝 ISRC from Deezer: {isrc}")
+                if (bpm is None or bpm == 0) and deezer_meta.get('bpm'):
+                    bpm = deezer_meta['bpm']
+                    print(f"   📝 BPM from Deezer: {bpm}")
+                if not album and deezer_meta.get('album'):
+                    album = deezer_meta['album']
+                    print(f"   📝 Album from Deezer: {album}")
+                if not genre and deezer_meta.get('genre'):
+                    genre = deezer_meta['genre']
+                    print(f"   📝 Genre from Deezer: {genre}")
+                if not sous_label and deezer_meta.get('label'):
+                    sous_label = deezer_meta['label']
+                    parent_label = get_parent_label(sous_label) if sous_label else ''
+                    if parent_label == sous_label:
+                        parent_label = ''
+                    print(f"   📝 Label from Deezer: {sous_label}")
+                if not date_sortie and deezer_meta.get('release_date'):
+                    try:
+                        date_obj = datetime.strptime(deezer_meta['release_date'][:10], '%Y-%m-%d')
+                        date_sortie = int(date_obj.timestamp())
+                        print(f"   📝 Release date from Deezer: {deezer_meta['release_date']}")
+                    except:
+                        pass
+                
+                # Cover: ALWAYS use Deezer cover (mandatory replacement)
+                if deezer_meta.get('cover_url'):
+                    cover_url = deezer_meta['cover_url']
+                    print(f"   🖼️ Cover from Deezer (replacing any existing): {cover_url[:80]}...")
+            else:
+                print(f"   ⚠️ No Deezer match found")
+        except Exception as e:
+            print(f"   ⚠️ Deezer lookup failed: {e}")
+        
+        # ─── FILTER 1: Skip if no Deezer match ───
+        if not deezer_meta.get('deezer_id'):
+            print(f"   ⏭️ SKIPPED: No Deezer match - track not written to DB")
+            return None
+        
         # Generate Track ID (clean format: no dashes, single underscores only)
         filename_raw = edit_info.get('name', '')
         filename_clean = filename_raw.replace('-', ' ').replace('_', ' ')
@@ -1977,7 +2268,8 @@ def prepare_track_metadata(edit_info, original_path, bpm, base_url=""):
             'Artiste original': artist,
             'Url': cover_url,
             'ISRC': isrc,
-            'TRACK_ID': track_id
+            'TRACK_ID': track_id,
+            '_force_cover_replace': True,  # Signal to DB service: always replace cover
         }
         
         return track_data
@@ -2091,8 +2383,14 @@ def create_edits(vocals_path, inst_path, original_path, base_output_path, base_f
     except Exception as e:
         print(f"Could not read BPM from metadata: {e}")
     
+    # Fallback: extract BPM from filename trailing number (DJ City format)
     if bpm is None:
-        log_message(f"⚠️ Pas de BPM dans les métadonnées originales")
+        bpm = extract_bpm_from_filename(base_filename)
+        if bpm:
+            log_message(f"BPM depuis nom de fichier: {bpm}")
+    
+    if bpm is None:
+        log_message(f"⚠️ Pas de BPM dans les métadonnées originales ni le nom de fichier")
     
     # FORCE MAIN ONLY MODE FOR ALL GENRES (TEMPORARY OVERRIDE)
     # Check genre to determine if we should generate full edits or just preserve original
@@ -3471,6 +3769,14 @@ def process_track_without_separation(filepath, filename, track_type, session_id=
         else:
             metadata_base_name = fallback_name
         
+        # Clean type markers from base name to avoid redundancy
+        # e.g., "Tt Freak (Clean)" with type "Original Clean" → base "Tt Freak"
+        # e.g., "Trompeta Y Fiesta (Djcity Intro) 130" → "Trompeta Y Fiesta"
+        cleaned_base = clean_detected_type_from_title(metadata_base_name, track_type)
+        if cleaned_base:
+            metadata_base_name = cleaned_base
+            log_message(f"📝 Cleaned base title: '{metadata_base_name}' (from type markers)")
+        
         # Get BPM from original metadata
         bpm = None
         try:
@@ -3480,6 +3786,12 @@ def process_track_without_separation(filepath, filename, track_type, session_id=
                     bpm = int(float(bpm_text))
         except:
             pass
+        
+        # Fallback: extract BPM from filename trailing number (DJ City format)
+        if bpm is None:
+            bpm = extract_bpm_from_filename(filename)
+            if bpm:
+                log_message(f"BPM depuis nom de fichier: {bpm}")
         
         # Create output directory
         track_output_dir = os.path.join(PROCESSED_FOLDER, metadata_base_name)
@@ -4390,6 +4702,74 @@ def upload_direct():
         if not original_title:
             original_title = os.path.splitext(safe_filename)[0]
         
+        # Fallback: extract BPM from filename trailing number (DJ City format)
+        if bpm is None:
+            bpm = extract_bpm_from_filename(file.filename or safe_filename)
+            if bpm:
+                log_message(f"🎵 [{session_id}] BPM from filename: {bpm}")
+        
+        # ─── Deezer API: enrich metadata (ISRC, BPM, album, label, genre, cover) ───
+        # Parse artist from filename for API search
+        search_artist = artist if artist != 'Unknown' else extract_artist(file.filename or safe_filename) if hasattr(extract_artist, '__call__') else ''
+        # Clean title for search (remove version markers, BPM, etc.)
+        search_title = clean_detected_type_from_title(original_title or safe_filename)
+        
+        deezer_meta = {}
+        try:
+            log_message(f"🔍 [{session_id}] Searching Deezer: '{search_artist}' - '{search_title}'")
+            deezer_meta = search_deezer_metadata(search_artist, search_title)
+            if deezer_meta.get('deezer_id'):
+                log_message(f"✅ [{session_id}] Deezer match: {deezer_meta.get('artist')} - {deezer_meta.get('title')} (ISRC: {deezer_meta.get('isrc', 'N/A')})")
+                
+                # Fill missing fields from Deezer (ID3 tags take priority)
+                if not isrc and deezer_meta.get('isrc'):
+                    isrc = deezer_meta['isrc']
+                    log_message(f"   📝 ISRC from Deezer: {isrc}")
+                if bpm is None and deezer_meta.get('bpm'):
+                    bpm = deezer_meta['bpm']
+                    log_message(f"   📝 BPM from Deezer: {bpm}")
+                if not album and deezer_meta.get('album'):
+                    album = deezer_meta['album']
+                    log_message(f"   📝 Album from Deezer: {album}")
+                if not genre and deezer_meta.get('genre'):
+                    genre = deezer_meta['genre']
+                    log_message(f"   📝 Genre from Deezer: {genre}")
+                if not sous_label and deezer_meta.get('label'):
+                    sous_label = deezer_meta['label']
+                    parent_label = get_parent_label(sous_label) if sous_label else ''
+                    if parent_label == sous_label:
+                        parent_label = ''
+                    log_message(f"   📝 Label from Deezer: {sous_label}")
+                if not date_sortie and deezer_meta.get('release_date'):
+                    try:
+                        date_obj = datetime.strptime(deezer_meta['release_date'][:10], '%Y-%m-%d')
+                        date_sortie = int(date_obj.timestamp())
+                        log_message(f"   📝 Release date from Deezer: {deezer_meta['release_date']}")
+                    except:
+                        pass
+                
+                # Cover: ALWAYS use Deezer cover (mandatory replacement)
+                if deezer_meta.get('cover_url'):
+                    cover_url = deezer_meta['cover_url']
+                    log_message(f"   🖼️ Cover from Deezer: {cover_url[:80]}...")
+            else:
+                log_message(f"⚠️ [{session_id}] No Deezer match found")
+        except Exception as e:
+            log_message(f"⚠️ [{session_id}] Deezer lookup failed: {e}")
+        
+        # ─── FILTER 1: Skip if no Deezer match ───
+        if not deezer_meta.get('deezer_id'):
+            log_message(f"⏭️ [{session_id}] SKIPPED: No Deezer match for '{safe_filename}' - track not written to DB")
+            # Clean up temp file
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            return jsonify({
+                'success': False,
+                'skipped': True,
+                'reason': 'No Deezer match found - track must have metadata from Deezer',
+                'filename': safe_filename
+            }), 200
+        
         # Auto-detect track type from title/filename
         detected_type = detect_track_type_from_title(original_title)
         if not detected_type:
@@ -4465,7 +4845,8 @@ def upload_direct():
             'Artiste original': artist,
             'Url': cover_url,
             'ISRC': isrc,
-            'TRACK_ID': track_id
+            'TRACK_ID': track_id,
+            '_force_cover_replace': True,  # Signal to DB service: always replace cover
         }
         
         log_message(f"📤 [{session_id}] Sending to database: {track_title} ({format_type}){' [fast mode]' if skip_waveform else ''}")
@@ -4616,6 +4997,56 @@ def upload_direct_batch():
                 except:
                     pass
             
+            # Fallback: extract BPM from filename trailing number (DJ City format)
+            if bpm is None:
+                bpm = extract_bpm_from_filename(file.filename or safe_filename)
+            
+            # ─── Deezer API: enrich metadata ───
+            search_artist = artist if artist != 'Unknown' else extract_artist(file.filename or safe_filename)
+            search_title = clean_detected_type_from_title(original_title or safe_filename)
+            
+            try:
+                log_message(f"🔍 [{session_id}] Batch Deezer: '{search_artist}' - '{search_title}'")
+                deezer_meta = search_deezer_metadata(search_artist, search_title)
+                if deezer_meta.get('deezer_id'):
+                    log_message(f"✅ [{session_id}] Deezer: {deezer_meta.get('artist')} - {deezer_meta.get('title')}")
+                    if not isrc and deezer_meta.get('isrc'):
+                        isrc = deezer_meta['isrc']
+                    if bpm is None and deezer_meta.get('bpm'):
+                        bpm = deezer_meta['bpm']
+                    if not album and deezer_meta.get('album'):
+                        album = deezer_meta['album']
+                    if not genre and deezer_meta.get('genre'):
+                        genre = deezer_meta['genre']
+                    if not sous_label and deezer_meta.get('label'):
+                        sous_label = deezer_meta['label']
+                        parent_label = get_parent_label(sous_label) if sous_label else ''
+                        if parent_label == sous_label:
+                            parent_label = ''
+                    if not date_sortie and deezer_meta.get('release_date'):
+                        try:
+                            date_obj = datetime.strptime(deezer_meta['release_date'][:10], '%Y-%m-%d')
+                            date_sortie = int(date_obj.timestamp())
+                        except:
+                            pass
+                    # Cover: ALWAYS use Deezer cover (mandatory replacement)
+                    if deezer_meta.get('cover_url'):
+                        cover_url = deezer_meta['cover_url']
+            except Exception as e:
+                log_message(f"⚠️ [{session_id}] Deezer batch error: {e}")
+            
+            # ─── FILTER 1: Skip if no Deezer match ───
+            if not deezer_meta.get('deezer_id'):
+                log_message(f"⏭️ [{session_id}] SKIPPED (batch): No Deezer match for '{safe_filename}'")
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                results.append({
+                    'filename': safe_filename, 'success': False,
+                    'skipped': True, 'reason': 'No Deezer match found'
+                })
+                error_count += 1
+                continue
+            
             # Auto-detect track type from title/filename
             detected_type = detect_track_type_from_title(original_title)
             if not detected_type:
@@ -4679,7 +5110,8 @@ def upload_direct_batch():
                 'Artiste original': artist,
                 'Url': cover_url,
                 'ISRC': isrc,
-                'TRACK_ID': track_id
+                'TRACK_ID': track_id,
+                '_force_cover_replace': True,
             }
             
             # Save to database

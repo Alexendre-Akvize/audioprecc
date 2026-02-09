@@ -63,6 +63,7 @@ model User {
   shortBio                String                   @default("")
   websiteUrl              String                   @default("")
   youtubeUrl              String                   @default("")
+  AccapellaLike           AccapellaLike[]
   Account                 Account[]
   Authenticator           Authenticator[]
   Bill                    Bill[]
@@ -73,7 +74,9 @@ model User {
   ForumComment            ForumComment[]
   ForumPost               ForumPost[]
   ForumVideo              ForumVideo[]
+  InstrumentalLike        InstrumentalLike[]
   InteractionForumPost    InteractionForumPost[]
+  IntroLike               IntroLike[]
   Like                    Like[]
   Listened                Listened[]
   Mix                     Mix[]
@@ -81,7 +84,9 @@ model User {
   PressInformation        PressInformation?
   PressKit                PressKit[]
   Session                 Session[]
+  ShortLike               ShortLike[]
   Subscription            Subscription?
+  SuperShortLike          SuperShortLike[]
   Track                   Track[]
   VIPLike                 VIPLike[]
   Artist                  Artist[]                 @relation("Artist_users")
@@ -189,8 +194,8 @@ model Credit {
 }
 
 model Track {
-  id                                           String            @id @default(cuid())
-  title                                        String            @default("")
+  id                                           String             @id @default(cuid())
+  title                                        String             @default("")
   trackFile_filesize                           Int?
   trackFile_filename                           String?
   coverImage_id                                String?
@@ -198,37 +203,37 @@ model Track {
   coverImage_width                             Int?
   coverImage_height                            Int?
   coverImage_extension                         String?
-  bpm                                          Int?              @default(0)
-  camelo                                       String?           @default("1A")
+  bpm                                          Int?               @default(0)
+  camelo                                       String?            @default("1A")
   energyLevel                                  String?
-  format                                       String            @default("")
+  format                                       String             @default("")
   tag                                          Int?
-  createdAt                                    DateTime?         @default(now())
-  updatedAt                                    DateTime?         @default(now())
-  downloadCount                                Int?              @default(0)
-  jsonData                                     Json?             @map("json")
-  teaserUrl                                    String            @default("")
-  isMix                                        Boolean           @default(false)
+  createdAt                                    DateTime?          @default(now())
+  updatedAt                                    DateTime?          @default(now())
+  downloadCount                                Int?               @default(0)
+  jsonData                                     Json?              @map("json")
+  teaserUrl                                    String             @default("")
+  isMix                                        Boolean            @default(false)
   user                                         String?
   trackPreview_filename                        String?
   trackPreview_filesize                        Int?
-  description                                  Json              @default("[{\"type\": \"paragraph\", \"children\": [{\"text\": \"\"}]}]")
-  editTitle                                    String            @default("")
-  originalArtist                               String            @default("")
-  exclusive                                    Boolean           @default(false)
-  soundcloudURL                                String            @default("")
-  rating                                       Float?            @default(7)
+  description                                  Json               @default("[{\"type\": \"paragraph\", \"children\": [{\"text\": \"\"}]}]")
+  editTitle                                    String             @default("")
+  originalArtist                               String             @default("")
+  exclusive                                    Boolean            @default(false)
+  soundcloudURL                                String             @default("")
+  rating                                       Float?             @default(7)
   trackWav_filename                            String?
   trackWav_filesize                            Int?
-  accapella                                    String            @default("")
-  instrumental                                 String            @default("")
-  hypeditURL                                   String            @default("")
-  style                                        Json              @default("[]")
-  mood                                         Json              @default("[]")
-  univers                                      Json              @default("[]")
-  under200                                     Boolean           @default(false)
-  duration                                     Float?            @default(0)
-  SousLabel                                    String            @default("")
+  accapella                                    String             @default("")
+  instrumental                                 String             @default("")
+  hypeditURL                                   String             @default("")
+  style                                        Json               @default("[]")
+  mood                                         Json               @default("[]")
+  univers                                      Json               @default("[]")
+  under200                                     Boolean            @default(false)
+  duration                                     Float?             @default(0)
+  SousLabel                                    String             @default("")
   acapInAcapOutMain_filename                   String?
   acapInAcapOutMain_filesize                   Int?
   acapIn_filename                              String?
@@ -237,8 +242,8 @@ model Track {
   acapOut_filesize                             Int?
   acapella_filename                            String?
   acapella_filesize                            Int?
-  album                                        String            @default("")
-  artistOnTitle                                String            @default("")
+  album                                        String             @default("")
+  artistOnTitle                                String             @default("")
   clapInMain_filename                          String?
   clapInMain_filesize                          Int?
   clapInShortAcapOut_filename                  String?
@@ -259,8 +264,8 @@ model Track {
   instru_filesize                              Int?
   intro_filename                               String?
   intro_filesize                               Int?
-  isOriginal                                   Boolean           @default(false)
-  key                                          String            @default("")
+  isOriginal                                   Boolean            @default(false)
+  key                                          String             @default("")
   label                                        String?
   originalTrackMp3Clean_filename               String?
   originalTrackMp3Clean_filesize               Int?
@@ -276,7 +281,7 @@ model Track {
   originalTrackWaveDirty_filesize              Int?
   originalTrackWave_filename                   String?
   originalTrackWave_filesize                   Int?
-  releaseDate                                  String            @default("")
+  releaseDate                                  String             @default("")
   shortAcapIn_filename                         String?
   shortAcapIn_filesize                         Int?
   shortAcapOut_filename                        String?
@@ -287,27 +292,27 @@ model Track {
   shortMain_filesize                           Int?
   short_filename                               String?
   short_filesize                               Int?
-  single                                       Boolean           @default(false)
+  single                                       Boolean            @default(false)
   slamDirtyMain_filename                       String?
   slamDirtyMain_filesize                       Int?
   slamIntroShortAcapOut_filename               String?
   slamIntroShortAcapOut_filesize               Int?
   superShort_filename                          String?
   superShort_filesize                          Int?
-  trackId                                      String            @default("")
+  trackId                                      String             @default("")
   previewJson                                  Json?
-  status                                       String?           @default("pending")
-  statusReason                                 String            @default("")
-  listeningsCount                              Int?              @default(0)
-  ISRC                                         String            @default("")
+  status                                       String?            @default("pending")
+  statusReason                                 String             @default("")
+  listeningsCount                              Int?               @default(0)
+  ISRC                                         String             @default("")
   appleMusicPlaylistCount                      Int?
   appleMusicStreams                            BigInt?
-  chartPeakCountry                             String            @default("")
+  chartPeakCountry                             String             @default("")
   chartPeakPosition                            Int?
   deezerStreams                                BigInt?
   shazamCount                                  Int?
   songstatsLastUpdated                         DateTime?
-  songstatsTrackId                             String            @default("")
+  songstatsTrackId                             String             @default("")
   spotifyPlaylistCount                         Int?
   spotifyPlaylistReach                         BigInt?
   spotifyStreams                               BigInt?
@@ -346,34 +351,78 @@ model Track {
   slamIntroShortAcapOutWav_filesize            Int?
   superShortWav_filename                       String?
   superShortWav_filesize                       Int?
+  acapInAcapOutMainJson                        Json?
+  acapInAcapOutMainWavJson                     Json?
+  acapInJson                                   Json?
+  acapInWavJson                                Json?
+  acapOutJson                                  Json?
+  acapOutWavJson                               Json?
+  acapellaJson                                 Json?
+  acapellaWavJson                              Json?
+  clapInMainJson                               Json?
+  clapInMainWavJson                            Json?
+  clapInShortAcapOutJson                       Json?
+  clapInShortAcapOutWavJson                    Json?
+  extendedTrackMp3CleanJson                    Json?
+  extendedTrackMp3DirtyJson                    Json?
+  extendedTrackMp3Json                         Json?
+  extendedTrackWaveCleanJson                   Json?
+  extendedTrackWaveDirtyJson                   Json?
+  extendedTrackWaveJson                        Json?
+  instruJson                                   Json?
+  instruWavJson                                Json?
+  introJson                                    Json?
+  introWavJson                                 Json?
+  originalTrackMp3CleanJson                    Json?
+  originalTrackMp3DirtyJson                    Json?
+  originalTrackMp3Json                         Json?
+  originalTrackMp3MainJson                     Json?
+  originalTrackWaveCleanJson                   Json?
+  originalTrackWaveDirtyJson                   Json?
+  originalTrackWaveJson                        Json?
+  shortAcapInJson                              Json?
+  shortAcapInWavJson                           Json?
+  shortAcapOutJson                             Json?
+  shortAcapOutWavJson                          Json?
+  shortClapInJson                              Json?
+  shortClapInWavJson                           Json?
+  shortJson                                    Json?
+  shortMainJson                                Json?
+  shortMainWavJson                             Json?
+  shortWavJson                                 Json?
+  slamDirtyMainJson                            Json?
+  slamDirtyMainWavJson                         Json?
+  slamIntroShortAcapOutJson                    Json?
+  slamIntroShortAcapOutWavJson                 Json?
+  superShortJson                               Json?
+  superShortWavJson                            Json?
+  AccapellaLike                                AccapellaLike[]
   Download                                     Download[]
+  InstrumentalLike                             InstrumentalLike[]
+  IntroLike                                    IntroLike[]
   Like                                         Like[]
   Listened                                     Listened[]
   Mix                                          Mix[]
   Sample                                       Sample[]
-  User                                         User?             @relation(fields: [user], references: [id])
+  ShortLike                                    ShortLike[]
+  SuperShortLike                               SuperShortLike[]
+  User                                         User?              @relation(fields: [user], references: [id])
   VIPLike                                      VIPLike[]
-  Album                                        Album[]           @relation("Album_Tracks")
-  Artist                                       Artist[]          @relation("Artist_tracks")
-  OriginalTrack                                OriginalTrack[]   @relation("OriginalTrack_originalLink")
-  Playlist                                     Playlist[]        @relation("Playlist_tracks")
-  PressKit                                     PressKit[]        @relation("PressKit_tracks")
-  ReferenceArtist_ReferenceArtist_accapella    ReferenceArtist[] @relation("ReferenceArtist_accapella")
-  ReferenceArtist_ReferenceArtist_instrumental ReferenceArtist[] @relation("ReferenceArtist_instrumental")
-  ReferenceArtist                              ReferenceArtist[] @relation("ReferenceArtist_tracks")
-  Search                                       Search[]          @relation("Search_track")
-  Tag                                          Tag[]             @relation("Tag_tracks")
-  Track_A                                      Track[]           @relation("Track_linkedTracks")
-  Track_B                                      Track[]           @relation("Track_linkedTracks")
-  UniversDetail                                UniversDetail[]   @relation("Track_universDetails")
+  Album                                        Album[]            @relation("Album_Tracks")
+  Artist                                       Artist[]           @relation("Artist_tracks")
+  OriginalTrack                                OriginalTrack[]    @relation("OriginalTrack_originalLink")
+  Playlist                                     Playlist[]         @relation("Playlist_tracks")
+  PressKit                                     PressKit[]         @relation("PressKit_tracks")
+  ReferenceArtist_ReferenceArtist_accapella    ReferenceArtist[]  @relation("ReferenceArtist_accapella")
+  ReferenceArtist_ReferenceArtist_instrumental ReferenceArtist[]  @relation("ReferenceArtist_instrumental")
+  ReferenceArtist                              ReferenceArtist[]  @relation("ReferenceArtist_tracks")
+  Search                                       Search[]           @relation("Search_track")
+  Tag                                          Tag[]              @relation("Tag_tracks")
+  Track_A                                      Track[]            @relation("Track_linkedTracks")
+  Track_B                                      Track[]            @relation("Track_linkedTracks")
+  UniversDetail                                UniversDetail[]    @relation("Track_universDetails")
 
-  // PERFORMANCE INDEXES for high-throughput lookups
   @@index([user])
-  @@index([trackId]) // Critical: lookup by trackId on every request
-  @@index([ISRC]) // For Songstats lookups
-  @@index([createdAt]) // For sorting by date
-  @@index([title]) // For search queries
-  @@index([status]) // For filtering by status
 }
 
 model Tag {
@@ -618,9 +667,6 @@ model Artist {
   Search                  Search[]          @relation("Artist_search")
   Track                   Track[]           @relation("Artist_tracks")
   User                    User[]            @relation("Artist_users")
-
-  // PERFORMANCE INDEX for artist name lookups
-  @@index([name])
 }
 
 model Bill {
@@ -705,14 +751,12 @@ model ReferenceArtist {
   spotifyMonthlyListeners            BigInt?
   tiktokFollowers                    BigInt?
   youtubeSubscribers                 BigInt?
+  isHighlighted                      Boolean         @default(false)
   Album                              Album[]         @relation("Album_artiste")
   OriginalTrack                      OriginalTrack[] @relation("OriginalTrack_referenceArtist")
   Track_ReferenceArtist_accapella    Track[]         @relation("ReferenceArtist_accapella")
   Track_ReferenceArtist_instrumental Track[]         @relation("ReferenceArtist_instrumental")
   Track                              Track[]         @relation("ReferenceArtist_tracks")
-
-  // PERFORMANCE INDEX for reference artist name lookups
-  @@index([name])
 }
 
 model Search {
@@ -844,9 +888,6 @@ model Album {
   Track           Track[]           @relation("Album_Tracks")
   ReferenceArtist ReferenceArtist[] @relation("Album_artiste")
   OriginalTrack   OriginalTrack[]   @relation("Album_originalTracks")
-
-  // PERFORMANCE INDEX for album name lookups
-  @@index([nomAlbum])
 }
 
 model ForumCategory {
@@ -1097,6 +1138,13 @@ model PressInformation {
   otherInformation4              String       @default("")
   createdAt                      DateTime?    @default(now())
   updatedAt                      DateTime?    @default(now())
+  logo_extension                 String?
+  logo_filesize                  Int?
+  logo_height                    Int?
+  logo_id                        String?
+  logo_width                     Int?
+  supportActs                    Json?
+  clubs                          Json?
   Console                        Console?
   User                           User?        @relation(fields: [user], references: [id])
   Accessory                      Accessory[]  @relation("Accessory_pressInformation")
@@ -1177,6 +1225,15 @@ model PressKit {
   phone                                                String             @default("")
   primaryColor                                         String             @default("")
   secondaryColor                                       String             @default("")
+  nologoPaid                                           Boolean            @default(false)
+  paid                                                 Boolean            @default(false)
+  logo_extension                                       String?
+  logo_filesize                                        Int?
+  logo_height                                          Int?
+  logo_id                                              String?
+  logo_width                                           Int?
+  supportActs                                          Json?
+  clubs                                                Json?
   PressKitTemplate                                     PressKitTemplate?  @relation(fields: [template], references: [id])
   User                                                 User?              @relation(fields: [user], references: [id])
   PressKitPage                                         PressKitPage[]
@@ -1283,9 +1340,110 @@ model UniversDetail {
   Track           Track[]   @relation("Track_universDetails")
 }
 
+model HomeInformation {
+  id                    String    @id
+  title                 String    @default("")
+  subtitle              String    @default("")
+  description           String    @default("")
+  cta                   String    @default("")
+  ctaLink               String    @default("")
+  icon_id               String?
+  icon_filesize         Int?
+  icon_width            Int?
+  icon_height           Int?
+  icon_extension        String?
+  image_id              String?
+  image_filesize        Int?
+  image_width           Int?
+  image_height          Int?
+  image_extension       String?
+  createdAt             DateTime? @default(now())
+  updatedAt             DateTime? @default(now())
+  hasToAppearOnHomepage Boolean   @default(false)
+  ctaES                 String    @default("")
+  ctaFR                 String    @default("")
+  ctaNL                 String    @default("")
+  ctaPT                 String    @default("")
+  descriptionES         String    @default("")
+  descriptionFR         String    @default("")
+  descriptionNL         String    @default("")
+  descriptionPT         String    @default("")
+  subtitleES            String    @default("")
+  subtitleFR            String    @default("")
+  subtitleNL            String    @default("")
+  subtitlePT            String    @default("")
+  titleES               String    @default("")
+  titleFR               String    @default("")
+  titleNL               String    @default("")
+  titlePT               String    @default("")
+}
 
-// Note: Run `prisma db pull` to generate models from existing database
-// Then run `prisma generate` to generate the Python client
+model AccapellaLike {
+  id             String    @id
+  user           String?
+  track          String?
+  userId_trackId String    @unique @default("")
+  createdAt      DateTime? @default(now())
+  updatedAt      DateTime? @default(now())
+  Track          Track?    @relation(fields: [track], references: [id])
+  User           User?     @relation(fields: [user], references: [id])
 
-// The actual models will be pulled from your existing database
-// This file is a placeholder - run the commands above to populate it
+  @@index([track])
+  @@index([user])
+}
+
+model InstrumentalLike {
+  id             String    @id
+  user           String?
+  track          String?
+  userId_trackId String    @unique @default("")
+  createdAt      DateTime? @default(now())
+  updatedAt      DateTime? @default(now())
+  Track          Track?    @relation(fields: [track], references: [id])
+  User           User?     @relation(fields: [user], references: [id])
+
+  @@index([track])
+  @@index([user])
+}
+
+model IntroLike {
+  id             String    @id
+  user           String?
+  track          String?
+  userId_trackId String    @unique @default("")
+  createdAt      DateTime? @default(now())
+  updatedAt      DateTime? @default(now())
+  Track          Track?    @relation(fields: [track], references: [id])
+  User           User?     @relation(fields: [user], references: [id])
+
+  @@index([track])
+  @@index([user])
+}
+
+model ShortLike {
+  id             String    @id
+  user           String?
+  track          String?
+  userId_trackId String    @unique @default("")
+  createdAt      DateTime? @default(now())
+  updatedAt      DateTime? @default(now())
+  Track          Track?    @relation(fields: [track], references: [id])
+  User           User?     @relation(fields: [user], references: [id])
+
+  @@index([track])
+  @@index([user])
+}
+
+model SuperShortLike {
+  id             String    @id
+  user           String?
+  track          String?
+  userId_trackId String    @unique @default("")
+  createdAt      DateTime? @default(now())
+  updatedAt      DateTime? @default(now())
+  Track          Track?    @relation(fields: [track], references: [id])
+  User           User?     @relation(fields: [user], references: [id])
+
+  @@index([track])
+  @@index([user])
+}

@@ -134,11 +134,16 @@ TYPE_TO_FILE_FIELD_MAP = {
     'preview': 'trackPreview',
 }
 
-# Fields that have WAV variants
+# Fields that have WAV variants (only Demucs-generated edits — Main/Original/Extended handled separately)
+# Acapella, Intro, Instrumental, Short, Super Short are MP3-only (no WAV needed)
 FIELDS_WITH_WAV_VARIANTS = [
     'clapInMain', 'shortMain', 'shortAcapIn', 'shortClapIn',
     'acapInAcapOutMain', 'slamDirtyMain', 'shortAcapOut',
     'clapInShortAcapOut', 'slamIntroShortAcapOut',
+]
+
+# Types that are MP3-only — if a WAV is uploaded for these, skip it
+MP3_ONLY_FIELDS = [
     'acapIn', 'acapOut', 'intro', 'short', 'acapella', 'instru', 'superShort',
 ]
 
@@ -311,6 +316,11 @@ class PrismaDatabaseService:
             print(f"   🔍 No base_field found for type '{track_type}'")
             return None
         
+        # MP3-only types: Acapella, Intro, Instrumental, Short, Super Short — skip WAV
+        if is_wav and base_field in MP3_ONLY_FIELDS:
+            print(f"   ⏭️ {base_field} is MP3-only — WAV skipped")
+            return None
+        
         if is_wav and base_field in FIELDS_WITH_WAV_VARIANTS:
             field = f"{base_field}Wav"
             print(f"   🔍 WAV variant: {base_field} → {field}")
@@ -341,41 +351,87 @@ class PrismaDatabaseService:
             print(f"   ⚠️ Artist lookup failed: {e}")
             return None
     
+    def _split_artist_string(self, artist_name: str) -> List[str]:
+        """Split compound artist string into individual names.
+        
+        'Akon Ft. John Mamann & Dawty Music' → ['Akon', 'John Mamann', 'Dawty Music']
+        'A Boogie Wit Da Hoodie & Pnb Rock' → ['A Boogie Wit Da Hoodie', 'Pnb Rock']
+        """
+        if not artist_name:
+            return []
+        
+        # Normalize separators to |
+        s = artist_name
+        # "Ft.", "Feat.", "feat.", "ft." "featuring" → separator
+        s = re.sub(r'\s+(?:feat\.?|ft\.?|featuring)\s+', '|', s, flags=re.IGNORECASE)
+        # " & " → separator (but not inside a name like "R&B")
+        s = re.sub(r'\s+&\s+', '|', s)
+        # " x " (collab marker) → separator
+        s = re.sub(r'\s+x\s+', '|', s, flags=re.IGNORECASE)
+        # ", " between artists
+        s = re.sub(r'\s*,\s+', '|', s)
+        
+        parts = [p.strip() for p in s.split('|') if p.strip()]
+        return parts
+    
+    def find_or_create_reference_artist(self, name: str):
+        """Find a reference artist by exact name (case-insensitive), or create one."""
+        if not name or len(name.strip()) < 2:
+            return None
+        
+        name = name.strip()
+        
+        try:
+            # Exact match (case-insensitive)
+            existing = self.db.referenceartist.find_first(
+                where={'name': {'equals': name, 'mode': 'insensitive'}}
+            )
+            if existing:
+                return existing
+            
+            # Create new reference artist with CUID v1 ID (matching Keystone format)
+            try:
+                import cuid as _cuid
+                new_id = _cuid.cuid()
+            except ImportError:
+                import uuid
+                new_id = 'c' + str(uuid.uuid4()).replace('-', '')[:24]
+            
+            new_artist = self.db.referenceartist.create(data={
+                'id': new_id,
+                'name': name,
+            })
+            print(f"   ➕ Created new ReferenceArtist: '{name}' (id={new_id})")
+            return new_artist
+        except Exception as e:
+            print(f"   ⚠️ ReferenceArtist upsert failed for '{name}': {e}")
+            return None
+    
     def find_reference_artists(self, artist_name: str) -> List:
-        """Find reference artists by name."""
+        """Find or create reference artists from a compound artist string.
+        
+        Splits 'Akon Ft. John Mamann & Dawty Music' into individual names,
+        then finds or creates each one as a ReferenceArtist.
+        """
         if not artist_name:
             return []
         
         try:
-            # Get all reference artists (filter None names in Python)
-            all_artists = self.db.referenceartist.find_many(take=1000)
-            
-            # Filter out artists with no name
-            all_artists = [a for a in all_artists if a.name]
-            
-            sorted_artists = sorted(all_artists, key=lambda x: len(x.name or ''), reverse=True)
-            search_string = artist_name.lower()
-            found_ids = set()
-            
-            for artist in sorted_artists:
-                if not artist.name or len(artist.name) < 2:
-                    continue
-                
-                lower_name = artist.name.lower()
-                regex = re.compile(rf'\b{re.escape(lower_name)}\b', re.IGNORECASE)
-                
-                if regex.search(search_string):
-                    found_ids.add(artist.id)
-                    search_string = regex.sub(' ' * len(lower_name), search_string)
-            
-            if not found_ids:
+            individual_names = self._split_artist_string(artist_name)
+            if not individual_names:
                 return []
             
-            return self.db.referenceartist.find_many(
-                where={'id': {'in': list(found_ids)}}
-            )
+            print(f"   🔍 Parsed artists: {individual_names}")
+            
+            results = []
+            for name in individual_names:
+                artist = self.find_or_create_reference_artist(name)
+                if artist:
+                    results.append(artist)
+            
+            return results
         except Exception as e:
-            print(f"   ⚠️ Reference artists lookup failed: {e}")
+            print(f"   ⚠️ Reference artists upsert failed: {e}")
             return []
     
     def find_or_create_album(self, album_name: str, release_date: str, 
@@ -612,22 +668,38 @@ class PrismaDatabaseService:
                     'isOriginal': True,
                 }
                 
-                # Add cover image if we uploaded one and track doesn't have one
-                if cover_image_data and not existing_track.coverImage_id:
+                # Add cover image: force replace if _force_cover_replace is set, otherwise only fill if empty
+                force_cover = track_data.get('_force_cover_replace', False)
+                if cover_image_data and (force_cover or not existing_track.coverImage_id):
                     update_data.update(cover_image_data)
+                    if force_cover and existing_track.coverImage_id:
+                        print(f"   🖼️ Replacing existing cover (mandatory Deezer cover replacement)")
                 
-                # Generate waveform for Main MP3 if track doesn't have one (unless skipped)
-                if not skip_waveform and WAVEFORM_AVAILABLE and file_field == 'trackFile' and file_url and (not existing_track.jsonData or not existing_track.duration):
+                # Generate waveform for audio fields (Main, Acapella, Intro, Instru, etc.)
+                # Map file_field → JSON waveform field name
+                waveform_json_field = 'jsonData' if file_field == 'trackFile' else f'{file_field}Json' if file_field else None
+                needs_waveform = (
+                    not skip_waveform and WAVEFORM_AVAILABLE and file_url and waveform_json_field
+                )
+                if file_field == 'trackFile':
+                    needs_waveform = needs_waveform and (not existing_track.jsonData or not existing_track.duration)
+                # For non-main fields, always generate (check if json field is empty via getattr)
+                elif waveform_json_field:
+                    existing_json = getattr(existing_track, waveform_json_field, None) if hasattr(existing_track, waveform_json_field) else None
+                    needs_waveform = needs_waveform and not existing_json
+                
+                if needs_waveform:
                     try:
-                        print(f"   📊 Generating waveform for existing track...")
+                        print(f"   📊 Generating waveform for {file_field}...")
                         waveform_data = generate_waveform_from_url(file_url)
                         if waveform_data:
-                            # jsonData stores just the peaks array
-                            update_data['jsonData'] = PrismaJson(waveform_data['waveform'])
-                            update_data['duration'] = waveform_data['duration']
-                            print(f"   ✅ Waveform added: {len(waveform_data['waveform'])} peaks, {waveform_data['duration']:.2f}s duration")
+                            update_data[waveform_json_field] = PrismaJson(waveform_data['waveform'])
+                            # Only set duration on trackFile (main track duration)
+                            if file_field == 'trackFile':
+                                update_data['duration'] = waveform_data['duration']
+                            print(f"   ✅ Waveform added to {waveform_json_field}: {len(waveform_data['waveform'])} peaks, {waveform_data['duration']:.2f}s")
                     except Exception as e:
-                        print(f"   ⚠️ Waveform generation failed: {e}")
+                        print(f"   ⚠️ Waveform generation failed for {file_field}: {e}")
                 elif skip_waveform:
                     print(f"   ⏭️ Waveform generation skipped (fast mode)")
                 
@@ -708,18 +780,19 @@ class PrismaDatabaseService:
                 if cover_image_data:
                     create_data.update(cover_image_data)
                 
-                # Generate waveform for Main MP3 tracks (unless skipped)
-                if not skip_waveform and WAVEFORM_AVAILABLE and file_field == 'trackFile' and file_url:
+                # Generate waveform for audio fields (Main, Acapella, Intro, Instru, etc.)
+                waveform_json_field = 'jsonData' if file_field == 'trackFile' else f'{file_field}Json' if file_field else None
+                if not skip_waveform and WAVEFORM_AVAILABLE and file_url and waveform_json_field:
                     try:
-                        print(f"   📊 Generating waveform...")
+                        print(f"   📊 Generating waveform for {file_field}...")
                         waveform_data = generate_waveform_from_url(file_url)
                         if waveform_data:
-                            # jsonData stores just the peaks array
-                            create_data['jsonData'] = PrismaJson(waveform_data['waveform'])
-                            create_data['duration'] = waveform_data['duration']
-                            print(f"   ✅ Waveform added: {len(waveform_data['waveform'])} peaks, {waveform_data['duration']:.2f}s duration")
+                            create_data[waveform_json_field] = PrismaJson(waveform_data['waveform'])
+                            if file_field == 'trackFile':
+                                create_data['duration'] = waveform_data['duration']
+                            print(f"   ✅ Waveform added to {waveform_json_field}: {len(waveform_data['waveform'])} peaks, {waveform_data['duration']:.2f}s")
                     except Exception as e:
-                        print(f"   ⚠️ Waveform generation failed: {e}")
+                        print(f"   ⚠️ Waveform generation failed for {file_field}: {e}")
                 elif skip_waveform:
                     print(f"   ⏭️ Waveform generation skipped (fast mode)")
                 
