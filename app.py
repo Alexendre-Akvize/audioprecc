@@ -678,6 +678,15 @@ def detect_track_type_from_title(title):
     Returns the detected type string or None if regular track.
     Case-insensitive matching.
     
+    Supports both parenthetical (DJ City) and square bracket (DJ pool) formats:
+    - (Clean), [Clean] → 'Original Clean'
+    - (Dirty), [Dirty] → 'Original Dirty'
+    - (Intro), [Intro Clean], [Intro Dirty] → 'Intro'
+    - (Inst), [Instrumental] → 'Instrumental'
+    - [Dirty Acapella], [Clean Acapella] → 'Acapella'
+    - [Quick Hit Clean], [Quick Hit Dirty] → 'Short'
+    - (Extended), [Extended] → 'Extended'
+    
     Detected types (mapped to database fields via TYPE_TO_FILE_FIELD_MAP):
     - 'Instrumental' → instru
     - 'Acapella' → acapella
@@ -685,36 +694,58 @@ def detect_track_type_from_title(title):
     - 'Original Clean' → originalTrackMp3Clean
     - 'Original Dirty' → originalTrackMp3Dirty
     - 'Intro' → intro
+    - 'Short' → short
     """
     if not title:
         return None
     
     title_lower = title.lower()
     
-    # === Parenthetical markers (most specific, check first) ===
+    # === Bracketed/Parenthetical markers (most specific, check first) ===
+    # Support both () and [] formats: [\(\[] for open, [\)\]] for close
     
-    # (Inst) or (Instrumental) - short form common in DJ City files
-    if re.search(r'\(\s*inst(?:rumental)?\s*\)', title_lower):
+    # [Inst] or [Instrumental] or (Inst) or (Instrumental)
+    if re.search(r'[\(\[]\s*inst(?:rumental)?\s*[\)\]]', title_lower):
         return 'Instrumental'
     
-    # (Intro), (Djcity Intro), (XXX Intro), (XXX Intro - Clean), (XXX Intro - Dirty)
-    if re.search(r'\(\s*(?:[\w\s]*\s+)?intro(?:\s*-\s*(?:clean|dirty))?\s*\)', title_lower):
+    # [Dirty Acapella] or [Clean Acapella] or (Dirty Acapella) or (Clean Acapella)
+    if re.search(r'[\(\[]\s*(?:dirty|clean)\s+acapella\s*[\)\]]', title_lower):
+        return 'Acapella'
+    
+    # [Acapella] or (Acapella)
+    if re.search(r'[\(\[]\s*acapella\s*[\)\]]', title_lower):
+        return 'Acapella'
+    
+    # [Intro Clean] or [Intro Dirty] or [Intro] or (Intro) etc.
+    if re.search(r'[\(\[]\s*(?:[\w\s]*\s+)?intro(?:\s+(?:clean|dirty))?(?:\s*-\s*(?:clean|dirty))?\s*[\)\]]', title_lower):
         return 'Intro'
     
-    # (Djcity Intro - Clean) or (Djcity Intro - Dirty) without parentheses wrapping
+    # Intro - Clean or Intro - Dirty without brackets
     if re.search(r'intro\s*-\s*(?:clean|dirty)', title_lower):
         return 'Intro'
     
-    # (Clean) - standalone clean version marker
-    if re.search(r'\(\s*clean\s*\)', title_lower):
+    # [Quick Hit Clean] or [Quick Hit Dirty] or [Quick Hit] or (Quick Hit)
+    if re.search(r'[\(\[]\s*quick\s*hit(?:\s+(?:clean|dirty))?\s*[\)\]]', title_lower):
+        return 'Short'
+    
+    # [Short] or (Short)
+    if re.search(r'[\(\[]\s*short\s*[\)\]]', title_lower):
+        return 'Short'
+    
+    # [Extended] or (Extended)
+    if re.search(r'[\(\[]\s*extended\s*[\)\]]', title_lower):
+        return 'Extended'
+    
+    # [Clean] or (Clean) - standalone clean version marker
+    if re.search(r'[\(\[]\s*clean\s*[\)\]]', title_lower):
         return 'Original Clean'
     
-    # (Dirty) - standalone dirty version marker
-    if re.search(r'\(\s*dirty\s*\)', title_lower):
+    # [Dirty] or (Dirty) - standalone dirty version marker
+    if re.search(r'[\(\[]\s*dirty\s*[\)\]]', title_lower):
         return 'Original Dirty'
     
-    # === General keywords (less specific) ===
-    if 'instrumental' in title_lower or '(inst)' in title_lower:
+    # === General keywords (less specific, no brackets needed) ===
+    if 'instrumental' in title_lower or '(inst)' in title_lower or '[inst]' in title_lower:
         return 'Instrumental'
     elif 'acapella' in title_lower or 'a capella' in title_lower or 'acappella' in title_lower:
         return 'Acapella'
@@ -747,6 +778,33 @@ def extract_bpm_from_filename(filename):
     return None
 
 
+def strip_trailing_bpm_and_key(title):
+    """
+    Remove trailing BPM number and/or Camelot key from a title.
+    DJ pools (DJcity, BPM Supreme, etc.) append these at the end of titles.
+    
+    Pattern: Title [Version] CamelotKey BPM
+    
+    Examples:
+    - 'Hot Spot [Dirty] 10A 93'           → 'Hot Spot [Dirty]'
+    - 'What\\'s Not To Love [Clean] 2A 98'  → 'What\\'s Not To Love [Clean]'
+    - 'Hot Spot [Dirty Acapella] 1B'       → 'Hot Spot [Dirty Acapella]'
+    - 'Hot Spot [Instrumental] 10A'        → 'Hot Spot [Instrumental]'
+    - 'Holiday [Quick Hit Clean] 7A 102'   → 'Holiday [Quick Hit Clean]'
+    - 'Fine Wine & Hennessy (Intro) 102'   → 'Fine Wine & Hennessy (Intro)'
+    """
+    if not title:
+        return title
+    
+    # Combined pattern: optional Camelot key (1A-12A, 1B-12B) + optional BPM (2-3 digits)
+    # Matches: "10A 93", "2A 98", "1B", "10A", "93", "102", etc.
+    cleaned = re.sub(r'\s+\d{1,2}[ABab]\s+\d{2,3}\s*$', '', title)    # "10A 93" at end
+    cleaned = re.sub(r'\s+\d{2,3}\s*$', '', cleaned)                   # standalone BPM at end
+    cleaned = re.sub(r'\s+\d{1,2}[ABab]\s*$', '', cleaned)             # standalone Camelot key at end
+    
+    return cleaned.strip()
+
+
 def clean_detected_type_from_title(title, detected_type=None):
     """
     Remove detected type markers and version info from title for use as base name.
@@ -772,15 +830,30 @@ def clean_detected_type_from_title(title, detected_type=None):
     # Remove file extension if present
     cleaned = re.sub(r'\.(mp3|wav|flac|aac|ogg|m4a)$', '', cleaned, flags=re.IGNORECASE)
     
-    # Remove trailing BPM number (2-3 digits at end)
-    cleaned = re.sub(r'\s+\d{2,3}\s*$', '', cleaned)
+    # Remove trailing BPM and/or Camelot key (e.g., "10A 93", "1B", "102")
+    cleaned = strip_trailing_bpm_and_key(cleaned)
     
-    # Remove parenthetical version/type markers
-    # (Clean), (Dirty), (Inst), (Instrumental)
-    cleaned = re.sub(r'\s*\(\s*(?:clean|dirty|inst(?:rumental)?)\s*\)', '', cleaned, flags=re.IGNORECASE)
+    # Remove parenthetical and square bracket version/type markers
+    # (Clean), (Dirty), (Inst), (Instrumental), [Clean], [Dirty], [Instrumental]
+    cleaned = re.sub(r'\s*[\(\[]\s*(?:clean|dirty|inst(?:rumental)?)\s*[\)\]]', '', cleaned, flags=re.IGNORECASE)
     
-    # (Djcity Intro - Clean), (Djcity Intro - Dirty), (Djcity Intro), (XXX Intro), (Intro)
-    cleaned = re.sub(r'\s*\(\s*(?:[\w\s]*\s+)?intro(?:\s*-\s*(?:clean|dirty))?\s*\)', '', cleaned, flags=re.IGNORECASE)
+    # [Dirty Acapella], [Clean Acapella], (Dirty Acapella)
+    cleaned = re.sub(r'\s*[\(\[]\s*(?:dirty|clean)\s+acapella\s*[\)\]]', '', cleaned, flags=re.IGNORECASE)
+    
+    # [Acapella], (Acapella)
+    cleaned = re.sub(r'\s*[\(\[]\s*acapella\s*[\)\]]', '', cleaned, flags=re.IGNORECASE)
+    
+    # [Quick Hit Clean], [Quick Hit Dirty], [Quick Hit], (Quick Hit)
+    cleaned = re.sub(r'\s*[\(\[]\s*quick\s*hit(?:\s+(?:clean|dirty))?\s*[\)\]]', '', cleaned, flags=re.IGNORECASE)
+    
+    # [Short], (Short)
+    cleaned = re.sub(r'\s*[\(\[]\s*short\s*[\)\]]', '', cleaned, flags=re.IGNORECASE)
+    
+    # [Extended], (Extended)
+    cleaned = re.sub(r'\s*[\(\[]\s*extended\s*[\)\]]', '', cleaned, flags=re.IGNORECASE)
+    
+    # (Djcity Intro - Clean), (Intro - Dirty), (Intro), [Intro Clean], [Intro Dirty], [Intro]
+    cleaned = re.sub(r'\s*[\(\[]\s*(?:[\w\s]*\s+)?intro(?:\s+(?:clean|dirty))?(?:\s*-\s*(?:clean|dirty))?\s*[\)\]]', '', cleaned, flags=re.IGNORECASE)
     
     # Remove artist name (everything before first " - ")
     if ' - ' in cleaned:
@@ -1049,10 +1122,12 @@ def clean_track_title(title):
         if len(parts) > 1:
             cleaned = parts[1]  # Keep only the track title part
     
-    # 2. Remove BPM numbers at the end (standalone numbers like "102", "128", etc.)
-    # Match: space + 2-3 digit number at end, or space + number + space before parenthesis
-    cleaned = re.sub(r'\s+\d{2,3}\s*$', '', cleaned)  # "Title 102" -> "Title"
-    cleaned = re.sub(r'\s+\d{2,3}\s+(\([^)]+\))\s*$', r' \1', cleaned)  # "Title 102 (Intro)" -> "Title (Intro)"
+    # 2. Remove trailing BPM and/or Camelot key (e.g., "10A 93", "1B", "102")
+    cleaned = strip_trailing_bpm_and_key(cleaned)
+    # Also handle BPM/key before parenthesis: "Title 102 (Intro)" -> "Title (Intro)"
+    cleaned = re.sub(r'\s+\d{1,2}[ABab]\s+\d{2,3}\s+(\([^)]+\))\s*$', r' \1', cleaned)
+    cleaned = re.sub(r'\s+\d{2,3}\s+(\([^)]+\))\s*$', r' \1', cleaned)
+    cleaned = re.sub(r'\s+\d{1,2}[ABab]\s+(\([^)]+\))\s*$', r' \1', cleaned)
     
     # 3. Replace DJ/pool names with "ID By Rivoli" (case-insensitive)
     for dj_name in DJ_NAMES_TO_REPLACE:
@@ -2417,6 +2492,9 @@ def create_edits(vocals_path, inst_path, original_path, base_output_path, base_f
     else:
         metadata_base_name = fallback_name
     
+    # Remove trailing BPM and/or Camelot key from base name (e.g., "10A 93", "1B", "102")
+    metadata_base_name = strip_trailing_bpm_and_key(metadata_base_name)
+    
     # Create correct output directory using metadata title
     correct_output_path = os.path.join(PROCESSED_FOLDER, metadata_base_name)
     os.makedirs(correct_output_path, exist_ok=True)
@@ -3769,6 +3847,9 @@ def process_track_without_separation(filepath, filename, track_type, session_id=
         else:
             metadata_base_name = fallback_name
         
+        # Remove trailing BPM and/or Camelot key from base name (e.g., "10A 93", "1B", "102")
+        metadata_base_name = strip_trailing_bpm_and_key(metadata_base_name)
+        
         # Clean type markers from base name to avoid redundancy
         # e.g., "Tt Freak (Clean)" with type "Original Clean" → base "Tt Freak"
         # e.g., "Trompeta Y Fiesta (Djcity Intro) 130" → "Trompeta Y Fiesta"
@@ -4702,6 +4783,9 @@ def upload_direct():
         if not original_title:
             original_title = os.path.splitext(safe_filename)[0]
         
+        # Remove trailing BPM and/or Camelot key from title (e.g., "10A 93", "1B", "102")
+        original_title = strip_trailing_bpm_and_key(original_title)
+        
         # Fallback: extract BPM from filename trailing number (DJ City format)
         if bpm is None:
             bpm = extract_bpm_from_filename(file.filename or safe_filename)
@@ -4787,12 +4871,17 @@ def upload_direct():
         log_message(f"🔍 [{session_id}] Track type: {track_type} (detected: {detected_type}, manual: {manual_track_type})")
         
         # Build the track title
-        # If the type is already in the title, use the title as-is
-        # Otherwise, append the type suffix
+        # The Titre field is passed to database_service which extracts the base title
+        # and maps the type to the correct file field. Pass the full title with type info.
         title_lower = original_title.lower()
         type_already_in_title = (
             track_type.lower() in title_lower or
-            (track_type == 'Acapella' and ('acapella' in title_lower or 'a capella' in title_lower or 'acappella' in title_lower))
+            (track_type == 'Acapella' and ('acapella' in title_lower or 'a capella' in title_lower or 'acappella' in title_lower)) or
+            (track_type == 'Short' and ('quick hit' in title_lower or 'short' in title_lower)) or
+            (track_type == 'Original Clean' and 'clean' in title_lower) or
+            (track_type == 'Original Dirty' and 'dirty' in title_lower) or
+            (track_type == 'Instrumental' and ('instrumental' in title_lower or 'inst]' in title_lower or 'inst)' in title_lower)) or
+            (track_type == 'Intro' and 'intro' in title_lower)
         )
         
         if type_already_in_title:
@@ -5001,6 +5090,9 @@ def upload_direct_batch():
             if bpm is None:
                 bpm = extract_bpm_from_filename(file.filename or safe_filename)
             
+            # Remove trailing BPM and/or Camelot key from title (e.g., "10A 93", "1B", "102")
+            original_title = strip_trailing_bpm_and_key(original_title)
+            
             # ─── Deezer API: enrich metadata ───
             search_artist = artist if artist != 'Unknown' else extract_artist(file.filename or safe_filename)
             search_title = clean_detected_type_from_title(original_title or safe_filename)
@@ -5056,11 +5148,16 @@ def upload_direct_batch():
             track_type = detected_type if detected_type else fallback_track_type
             
             # Build track title
-            # If the type is already in the title, use as-is
+            # The Titre field is passed to database_service which extracts the base title
             title_lower = original_title.lower()
             type_already_in_title = (
                 track_type.lower() in title_lower or
-                (track_type == 'Acapella' and ('acapella' in title_lower or 'a capella' in title_lower or 'acappella' in title_lower))
+                (track_type == 'Acapella' and ('acapella' in title_lower or 'a capella' in title_lower or 'acappella' in title_lower)) or
+                (track_type == 'Short' and ('quick hit' in title_lower or 'short' in title_lower)) or
+                (track_type == 'Original Clean' and 'clean' in title_lower) or
+                (track_type == 'Original Dirty' and 'dirty' in title_lower) or
+                (track_type == 'Instrumental' and ('instrumental' in title_lower or 'inst]' in title_lower or 'inst)' in title_lower)) or
+                (track_type == 'Intro' and 'intro' in title_lower)
             )
             
             if type_already_in_title:

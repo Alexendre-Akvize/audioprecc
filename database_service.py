@@ -97,6 +97,9 @@ TYPE_TO_FILE_FIELD_MAP = {
     'Short Acap In': 'shortAcapIn',
     'Short Acap Out': 'shortAcapOut',
     'Short Clap In': 'shortClapIn',
+    'Quick Hit': 'short',
+    'Quick Hit Clean': 'short',
+    'Quick Hit Dirty': 'short',
     'short': 'short',
     'short main': 'shortMain',
     'short acap in': 'shortAcapIn',
@@ -232,20 +235,83 @@ class PrismaDatabaseService:
         return value
     
     def extract_base_track_id(self, track_id: str, track_type: Optional[str] = None) -> str:
-        """Extract base track ID by removing variant type suffix."""
-        if not track_type:
-            return track_id
+        """Extract base track ID by removing variant type suffix and bracket markers.
         
-        type_suffix = '_' + track_type.replace(' ', '_')
-        if track_id.lower().endswith(type_suffix.lower()):
-            return track_id[:-len(type_suffix)]
+        Track IDs use underscores instead of spaces, so we normalize first.
+        e.g., 'ISRC_Hot_Spot_[Dirty]_10A_93' → 'ISRC_Hot_Spot'
+        """
+        # Normalize: replace underscores with spaces for cleaning, then convert back
+        result = track_id.replace('_', ' ')
         
-        return track_id
+        # Remove bracket-based markers from DJ pools
+        # [Dirty Acapella], [Clean Acapella]
+        result = re.sub(r'\s*\[\s*(?:Dirty|Clean)\s+Acapella\s*\]', '', result, flags=re.IGNORECASE)
+        # [Quick Hit Clean], [Quick Hit Dirty], [Quick Hit]
+        result = re.sub(r'\s*\[\s*Quick\s*Hit(?:\s+(?:Clean|Dirty))?\s*\]', '', result, flags=re.IGNORECASE)
+        # [Intro Clean], [Intro Dirty], [Intro], [XXX Intro]
+        result = re.sub(r'\s*\[\s*(?:[\w\s]*\s+)?Intro(?:\s+(?:Clean|Dirty))?\s*\]', '', result, flags=re.IGNORECASE)
+        # [Clean], [Dirty], [Instrumental], [Acapella], [Short], [Extended]
+        result = re.sub(r'\s*\[\s*(?:Clean|Dirty|Inst(?:rumental)?|Acapella|Short|Extended)\s*\]', '', result, flags=re.IGNORECASE)
+        
+        # Remove parenthetical markers too
+        result = re.sub(r'\s*\(\s*(?:Dirty|Clean)\s+Acapella\s*\)', '', result, flags=re.IGNORECASE)
+        result = re.sub(r'\s*\(\s*Quick\s*Hit(?:\s+(?:Clean|Dirty))?\s*\)', '', result, flags=re.IGNORECASE)
+        result = re.sub(r'\s*\(\s*(?:[\w\s]*\s+)?Intro(?:\s+(?:Clean|Dirty))?(?:\s*-\s*(?:Clean|Dirty))?\s*\)', '', result, flags=re.IGNORECASE)
+        result = re.sub(r'\s*\(\s*(?:Clean|Dirty|Inst(?:rumental)?|Acapella|Short|Extended)\s*\)', '', result, flags=re.IGNORECASE)
+        
+        # Remove trailing BPM and/or Camelot key
+        result = re.sub(r'\s+\d{1,2}[ABab]\s+\d{2,3}\s*$', '', result)
+        result = re.sub(r'\s+\d{2,3}\s*$', '', result)
+        result = re.sub(r'\s+\d{1,2}[ABab]\s*$', '', result)
+        
+        # Remove dash-based type suffix: " - Instrumental", " - Main", etc.
+        if track_type:
+            dash_pattern = re.compile(rf'\s*-\s*{re.escape(track_type)}\s*$', re.IGNORECASE)
+            result = dash_pattern.sub('', result)
+            type_suffix = ' ' + track_type
+            if result.lower().endswith(type_suffix.lower()):
+                result = result[:-len(type_suffix)]
+        
+        # Clean up and convert back to underscore format
+        result = result.strip()
+        result = re.sub(r'[\s\-]+$', '', result)
+        result = result.replace(' ', '_')
+        result = re.sub(r'_+', '_', result)
+        result = re.sub(r'_$', '', result)
+        
+        return result
     
     def extract_base_title(self, title: str, track_type: Optional[str] = None) -> str:
-        """Extract base title by removing variant type suffix."""
+        """Extract base title by removing variant type suffix and bracket markers.
+        
+        Handles:
+        - 'Hot Spot - Instrumental' → 'Hot Spot'
+        - 'Hot Spot [Dirty]' → 'Hot Spot'
+        - 'Hot Spot [Intro Clean]' → 'Hot Spot'
+        - 'Hot Spot [Quick Hit Dirty]' → 'Hot Spot'
+        - 'Hot Spot [Dirty Acapella]' → 'Hot Spot'
+        """
         result = title
         
+        # Remove square bracket version/type markers from DJ pools
+        # [Clean], [Dirty], [Instrumental], [Intro Clean/Dirty], [Quick Hit Clean/Dirty], [Dirty Acapella], etc.
+        result = re.sub(r'\s*\[\s*(?:dirty|clean)\s+acapella\s*\]', '', result, flags=re.IGNORECASE)
+        result = re.sub(r'\s*\[\s*quick\s*hit(?:\s+(?:clean|dirty))?\s*\]', '', result, flags=re.IGNORECASE)
+        result = re.sub(r'\s*\[\s*(?:[\w\s]*\s+)?intro(?:\s+(?:clean|dirty))?\s*\]', '', result, flags=re.IGNORECASE)
+        result = re.sub(r'\s*\[\s*(?:clean|dirty|inst(?:rumental)?|acapella|short|extended)\s*\]', '', result, flags=re.IGNORECASE)
+        
+        # Remove parenthetical version/type markers
+        result = re.sub(r'\s*\(\s*(?:dirty|clean)\s+acapella\s*\)', '', result, flags=re.IGNORECASE)
+        result = re.sub(r'\s*\(\s*quick\s*hit(?:\s+(?:clean|dirty))?\s*\)', '', result, flags=re.IGNORECASE)
+        result = re.sub(r'\s*\(\s*(?:[\w\s]*\s+)?intro(?:\s+(?:clean|dirty))?(?:\s*-\s*(?:clean|dirty))?\s*\)', '', result, flags=re.IGNORECASE)
+        result = re.sub(r'\s*\(\s*(?:clean|dirty|inst(?:rumental)?|acapella|short|extended)\s*\)', '', result, flags=re.IGNORECASE)
+        
+        # Remove trailing BPM and/or Camelot key (e.g., "10A 93", "1B", "102")
+        result = re.sub(r'\s+\d{1,2}[ABab]\s+\d{2,3}\s*$', '', result)
+        result = re.sub(r'\s+\d{2,3}\s*$', '', result)
+        result = re.sub(r'\s+\d{1,2}[ABab]\s*$', '', result)
+        
+        # Also remove dash-based type suffix: "- Instrumental", "- Main", etc.
         if track_type:
             dash_pattern = re.compile(rf'\s*-\s*{re.escape(track_type)}\s*$', re.IGNORECASE)
             if dash_pattern.search(result):
