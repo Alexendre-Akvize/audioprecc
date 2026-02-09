@@ -917,6 +917,7 @@ def search_deezer_metadata(artist, title, timeout=10):
         'duration': None,
         'explicit': False,
         'deezer_link': '',
+        'match_score': 0.0,       # How well the result matches the query (0-1)
     }
 
     if not artist or not title:
@@ -949,10 +950,73 @@ def search_deezer_metadata(artist, title, timeout=10):
         if not tracks:
             return result
 
-        # Pick best match (first result is usually best; Deezer ranks by relevance)
-        track = tracks[0]
+        # ── Score each result and pick the best match ──
+        def _normalize(s):
+            """Lowercase, strip accents, remove punctuation for comparison."""
+            import unicodedata
+            s = unicodedata.normalize('NFKD', str(s).lower())
+            s = ''.join(c for c in s if not unicodedata.combining(c))
+            s = re.sub(r'[^a-z0-9\s]', '', s)
+            return ' '.join(s.split())
+
+        def _word_overlap_score(a, b):
+            """Return 0-1 score based on word overlap (Jaccard-like)."""
+            words_a = set(_normalize(a).split())
+            words_b = set(_normalize(b).split())
+            if not words_a or not words_b:
+                return 0.0
+            intersection = words_a & words_b
+            union = words_a | words_b
+            return len(intersection) / len(union) if union else 0.0
+
+        def _contains_score(query, candidate):
+            """Return 1.0 if normalized query is contained in candidate or vice versa."""
+            nq = _normalize(query)
+            nc = _normalize(candidate)
+            if nq in nc or nc in nq:
+                return 1.0
+            return 0.0
+
+        def _score_track(t, searched_artist, searched_title):
+            """Score a Deezer result (0-1) against searched artist+title."""
+            t_artist = t.get('artist', {}).get('name', '')
+            t_title = t.get('title', '')
+
+            # Artist score: best of word-overlap and contains
+            artist_score = max(
+                _word_overlap_score(searched_artist, t_artist),
+                _contains_score(searched_artist, t_artist)
+            )
+            # Title score: best of word-overlap and contains
+            title_score = max(
+                _word_overlap_score(searched_title, t_title),
+                _contains_score(searched_title, t_title)
+            )
+            # Combined: title matters more (60%) since covers depend on it
+            return artist_score * 0.4 + title_score * 0.6
+
+        # Score all candidates and pick the best
+        MINIMUM_MATCH_SCORE = 0.30  # Below this, treat as no match
+        best_track = None
+        best_score = -1.0
+        for t in tracks:
+            s = _score_track(t, clean_artist, clean_title)
+            t_artist = t.get('artist', {}).get('name', '')
+            t_title = t.get('title', '')
+            print(f"   🎯 Deezer candidate: '{t_artist}' - '{t_title}' → score {s:.2f}")
+            if s > best_score:
+                best_score = s
+                best_track = t
+
+        if best_score < MINIMUM_MATCH_SCORE or best_track is None:
+            print(f"   ❌ No Deezer result above threshold ({best_score:.2f} < {MINIMUM_MATCH_SCORE})")
+            return result
+
+        track = best_track
+        print(f"   ✅ Best Deezer match (score {best_score:.2f}): '{track.get('artist', {}).get('name', '')}' - '{track.get('title', '')}'")
         deezer_id = track.get('id')
         result['deezer_id'] = deezer_id
+        result['match_score'] = best_score
         result['title'] = track.get('title', '')
         result['artist'] = track.get('artist', {}).get('name', '')
         result['album'] = track.get('album', {}).get('title', '')
@@ -2300,10 +2364,13 @@ def prepare_track_metadata(edit_info, original_path, bpm, base_url=""):
                     except:
                         pass
                 
-                # Cover: ALWAYS use Deezer cover (mandatory replacement)
-                if deezer_meta.get('cover_url'):
+                # Cover: Only use Deezer cover if match is confident enough
+                deezer_match_score = deezer_meta.get('match_score', 0.0)
+                if deezer_meta.get('cover_url') and deezer_match_score >= 0.5:
                     cover_url = deezer_meta['cover_url']
-                    print(f"   🖼️ Cover from Deezer (replacing any existing): {cover_url[:80]}...")
+                    print(f"   🖼️ Cover from Deezer (score {deezer_match_score:.2f}): {cover_url[:80]}...")
+                elif deezer_meta.get('cover_url'):
+                    print(f"   ⚠️ Deezer cover skipped (low match score {deezer_match_score:.2f}), keeping original cover")
             else:
                 print(f"   ⚠️ No Deezer match found")
         except Exception as e:
@@ -2344,7 +2411,7 @@ def prepare_track_metadata(edit_info, original_path, bpm, base_url=""):
             'Url': cover_url,
             'ISRC': isrc,
             'TRACK_ID': track_id,
-            '_force_cover_replace': True,  # Signal to DB service: always replace cover
+            '_force_cover_replace': deezer_meta.get('match_score', 0.0) >= 0.5 if deezer_meta.get('cover_url') else False,
         }
         
         return track_data
@@ -4832,10 +4899,13 @@ def upload_direct():
                     except:
                         pass
                 
-                # Cover: ALWAYS use Deezer cover (mandatory replacement)
-                if deezer_meta.get('cover_url'):
+                # Cover: Only use Deezer cover if match is confident enough
+                deezer_match_score = deezer_meta.get('match_score', 0.0)
+                if deezer_meta.get('cover_url') and deezer_match_score >= 0.5:
                     cover_url = deezer_meta['cover_url']
-                    log_message(f"   🖼️ Cover from Deezer: {cover_url[:80]}...")
+                    log_message(f"   🖼️ Cover from Deezer (score {deezer_match_score:.2f}): {cover_url[:80]}...")
+                elif deezer_meta.get('cover_url'):
+                    log_message(f"   ⚠️ Deezer cover skipped (low match score {deezer_match_score:.2f}), keeping original cover")
             else:
                 log_message(f"⚠️ [{session_id}] No Deezer match found")
         except Exception as e:
@@ -4935,7 +5005,7 @@ def upload_direct():
             'Url': cover_url,
             'ISRC': isrc,
             'TRACK_ID': track_id,
-            '_force_cover_replace': True,  # Signal to DB service: always replace cover
+            '_force_cover_replace': deezer_meta.get('match_score', 0.0) >= 0.5 if deezer_meta.get('cover_url') else False,
         }
         
         log_message(f"📤 [{session_id}] Sending to database: {track_title} ({format_type}){' [fast mode]' if skip_waveform else ''}")
@@ -5121,9 +5191,12 @@ def upload_direct_batch():
                             date_sortie = int(date_obj.timestamp())
                         except:
                             pass
-                    # Cover: ALWAYS use Deezer cover (mandatory replacement)
-                    if deezer_meta.get('cover_url'):
+                    # Cover: Only use Deezer cover if match is confident enough
+                    deezer_match_score = deezer_meta.get('match_score', 0.0)
+                    if deezer_meta.get('cover_url') and deezer_match_score >= 0.5:
                         cover_url = deezer_meta['cover_url']
+                    elif deezer_meta.get('cover_url'):
+                        log_message(f"   ⚠️ Deezer cover skipped (low score {deezer_match_score:.2f})")
             except Exception as e:
                 log_message(f"⚠️ [{session_id}] Deezer batch error: {e}")
             
@@ -5208,7 +5281,7 @@ def upload_direct_batch():
                 'Url': cover_url,
                 'ISRC': isrc,
                 'TRACK_ID': track_id,
-                '_force_cover_replace': True,
+                '_force_cover_replace': deezer_meta.get('match_score', 0.0) >= 0.5 if deezer_meta.get('cover_url') else False,
             }
             
             # Save to database
