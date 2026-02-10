@@ -26,7 +26,6 @@ from config import (
     MEMORY_HIGH_THRESHOLD,
     MEMORY_CRITICAL_THRESHOLD,
     CPU_COUNT,
-    NUM_WORKERS,
     track_queue,
     pending_downloads_lock,
     pending_downloads,
@@ -584,7 +583,7 @@ def run_demucs_thread(filepaths, original_filenames):
         
         # Process edits in parallel using ThreadPoolExecutor
         # Limit workers to avoid memory overload (each edit loads ~3 audio files)
-        edit_workers = max(2, min(NUM_WORKERS // 2, CPU_COUNT // 2, 8))
+        edit_workers = max(2, min(config.NUM_WORKERS // 2, CPU_COUNT // 2, 8))
         print(f"🚀 Génération des edits avec {edit_workers} workers parallèles [RAM: {get_memory_percent():.1f}%]")
         
         from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -863,11 +862,11 @@ def process_single_track(filepath, filename, session_id='global', worker_id=None
                 log_message(f"🎵 Séparation vocale/instrumentale ({device_emoji})...")
                 
                 if device == 'cuda':
-                    jobs = max(1, CPU_COUNT // max(NUM_WORKERS, 1))
-                    log_message(f"🚀 GPU mode: {jobs} job(s) per worker × {NUM_WORKERS} workers = {jobs * NUM_WORKERS} total CPU threads (CPUs: {CPU_COUNT})")
+                    jobs = max(1, CPU_COUNT // max(config.NUM_WORKERS, 1))
+                    log_message(f"🚀 GPU mode: {jobs} job(s) per worker × {config.NUM_WORKERS} workers = {jobs * config.NUM_WORKERS} total CPU threads (CPUs: {CPU_COUNT})")
                 else:
-                    jobs = max(1, CPU_COUNT // max(NUM_WORKERS * 2, 1))
-                    log_message(f"⚠️ CPU mode: {jobs} job(s) per worker × {NUM_WORKERS} workers")
+                    jobs = max(1, CPU_COUNT // max(config.NUM_WORKERS * 2, 1))
+                    log_message(f"⚠️ CPU mode: {jobs} job(s) per worker × {config.NUM_WORKERS} workers")
                 
                 # Use demucs_runner.py wrapper to fix torchaudio/torchcodec compatibility
                 DEMUCS_RUNNER = os.path.join(BASE_DIR, 'demucs_runner.py')
@@ -1280,8 +1279,14 @@ def worker(worker_id):
             track_queue.task_done()
             current_filename = None  # Clear so exception handler doesn't double-process
             
-            # MEMORY SAFETY: Force garbage collection after each track
+            # MEMORY SAFETY: Force garbage collection + clear GPU cache after each track
             force_garbage_collect(f"Worker {worker_id} after {filename}")
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
             
             # Reset state to idle if queue is empty
             if track_queue.empty():

@@ -347,20 +347,40 @@ def system_stats():
     except:
         pass
     
-    # GPU stats
+    # GPU stats - use nvidia-smi for real utilization (subprocess GPU usage)
     try:
-        import torch
-        if torch.cuda.is_available():
-            stats['gpu']['available'] = True
-            stats['gpu']['name'] = torch.cuda.get_device_name(0)
-            props = torch.cuda.get_device_properties(0)
-            stats['gpu']['memory_gb'] = round(props.total_memory / (1024**3), 1)
-            
-            allocated = torch.cuda.memory_allocated(0)
-            stats['gpu']['memory_used_gb'] = round(allocated / (1024**3), 2)
-            stats['gpu']['memory_used_percent'] = round(allocated / props.total_memory * 100, 1)
-    except:
-        pass
+        import subprocess as _sp
+        nvidia_result = _sp.run(
+            ['nvidia-smi', '--query-gpu=name,memory.total,memory.used,utilization.gpu',
+             '--format=csv,noheader,nounits'],
+            capture_output=True, text=True, timeout=5
+        )
+        if nvidia_result.returncode == 0:
+            parts = [p.strip() for p in nvidia_result.stdout.strip().split(',')]
+            if len(parts) >= 4:
+                stats['gpu']['available'] = True
+                stats['gpu']['name'] = parts[0]
+                total_mb = float(parts[1])
+                used_mb = float(parts[2])
+                stats['gpu']['memory_gb'] = round(total_mb / 1024, 1)
+                stats['gpu']['memory_used_gb'] = round(used_mb / 1024, 2)
+                stats['gpu']['memory_used_percent'] = round(used_mb / total_mb * 100, 1) if total_mb > 0 else 0
+                stats['gpu']['utilization_percent'] = int(parts[3])
+    except Exception:
+        # Fallback to PyTorch stats (only sees parent process allocations)
+        try:
+            import torch
+            if torch.cuda.is_available():
+                stats['gpu']['available'] = True
+                stats['gpu']['name'] = torch.cuda.get_device_name(0)
+                props = torch.cuda.get_device_properties(0)
+                stats['gpu']['memory_gb'] = round(props.total_memory / (1024**3), 1)
+                
+                allocated = torch.cuda.memory_allocated(0)
+                stats['gpu']['memory_used_gb'] = round(allocated / (1024**3), 2)
+                stats['gpu']['memory_used_percent'] = round(allocated / props.total_memory * 100, 1)
+        except Exception:
+            pass
     
     return jsonify(stats)
 

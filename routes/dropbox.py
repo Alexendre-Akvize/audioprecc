@@ -31,7 +31,6 @@ from config import (
     bulk_import_lock,
     MEMORY_HIGH_THRESHOLD,
     MEMORY_CRITICAL_THRESHOLD,
-    NUM_WORKERS,
 )
 from services.dropbox_service import get_valid_dropbox_token, is_token_expired_error
 from services.queue_service import (
@@ -517,8 +516,8 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
     # Configuration - scale buffer based on worker count to avoid overwhelming resources
     # Each queued track takes ~5-15MB disk + the worker uses ~2-4GB RAM for demucs
     # Keep buffer proportional to what workers can actually process
-    BUFFER_SIZE = max(5, NUM_WORKERS * 5)  # 5 tracks per worker (not 200 hardcoded)
-    DOWNLOAD_BATCH = max(2, NUM_WORKERS * 2)  # Download 2 per worker at a time
+    BUFFER_SIZE = max(5, config.NUM_WORKERS * 5)  # 5 tracks per worker (not 200 hardcoded)
+    DOWNLOAD_BATCH = max(2, config.NUM_WORKERS * 2)  # Download 2 per worker at a time
     RESCAN_INTERVAL = 30  # Seconds to wait before rescanning for new files
     MAX_EMPTY_SCANS = 2  # Stop after N consecutive empty scans (0 = never stop)
     
@@ -747,7 +746,7 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
             print(f"   Total files: {len(all_files)}")
             print(f"   Buffer size: {BUFFER_SIZE} tracks")
             print(f"   Download batch: {DOWNLOAD_BATCH} at a time")
-            print(f"   Workers: {NUM_WORKERS}")
+            print(f"   Workers: {config.NUM_WORKERS}")
             print(f"{'='*60}\n")
 
             def get_queue_size():
@@ -978,7 +977,7 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
 
             file_index = 0
             iteration_downloaded = 0  # Per-iteration download counter (NOT accumulated across rescans)
-            download_threads = min(NUM_WORKERS, 10)  # Limit concurrent downloads
+            download_threads = min(config.NUM_WORKERS, 10)  # Limit concurrent downloads
 
             print(f"🚀 Starting pipeline with {download_threads} download threads")
 
@@ -1332,15 +1331,15 @@ def dropbox_download_and_process_thread(import_id, files_to_import, session_id, 
     
     print(f"📦 Smart pipeline started with namespace: {root_namespace_id}")
     print(f"   Total files: {len(files_to_import)}")
-    print(f"   Workers: {NUM_WORKERS}")
+    print(f"   Workers: {config.NUM_WORKERS}")
     
     # Create session-specific upload folder
     session_upload_folder = os.path.join(UPLOAD_FOLDER, session_id)
     os.makedirs(session_upload_folder, exist_ok=True)
     
     # Pipeline settings - download what workers can handle + small buffer
-    BUFFER_SIZE = NUM_WORKERS * 2  # Keep 2x workers worth of tracks ready
-    DOWNLOAD_BATCH = NUM_WORKERS   # Download in batches of NUM_WORKERS
+    BUFFER_SIZE = config.NUM_WORKERS * 2  # Keep 2x workers worth of tracks ready
+    DOWNLOAD_BATCH = config.NUM_WORKERS   # Download in batches of config.NUM_WORKERS
     
     # Track state
     file_index = 0
@@ -1480,7 +1479,7 @@ def dropbox_download_and_process_thread(import_id, files_to_import, session_id, 
                             dropbox_imports[import_id]['status'] = 'downloading'
                     
                     # Download batch in parallel (limited threads)
-                    download_threads = min(NUM_WORKERS, 8)
+                    download_threads = min(config.NUM_WORKERS, 8)
                     with ThreadPoolExecutor(max_workers=download_threads) as executor:
                         futures = [executor.submit(download_and_queue_single, f) for f in batch_files]
                         for future in as_completed(futures):

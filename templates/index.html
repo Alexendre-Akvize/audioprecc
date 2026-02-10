@@ -3155,8 +3155,13 @@
                         document.getElementById('gpuChip').style.display = 'flex';
                         document.getElementById('gpuValue').textContent = stats.gpu.name.split(' ').pop();
                         document.getElementById('gpuMem').textContent = stats.gpu.memory_gb + 'GB';
-                        document.getElementById('gpuUsage').textContent = stats.gpu.memory_used_percent + '%';
-                        document.getElementById('gpuName').textContent = stats.gpu.name;
+                        // Show GPU compute utilization if available (from nvidia-smi), fallback to memory %
+                        const gpuPct = stats.gpu.utilization_percent != null ? stats.gpu.utilization_percent : stats.gpu.memory_used_percent;
+                        document.getElementById('gpuUsage').textContent = gpuPct + '%';
+                        const gpuMemInfo = stats.gpu.memory_used_gb != null
+                            ? stats.gpu.name + ' (' + stats.gpu.memory_used_gb + '/' + stats.gpu.memory_gb + ' GB VRAM)'
+                            : stats.gpu.name;
+                        document.getElementById('gpuName').textContent = gpuMemInfo;
                     }
 
                     document.getElementById('memUsage').textContent = stats.memory.used_percent + '%';

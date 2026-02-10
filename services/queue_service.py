@@ -9,13 +9,13 @@ import uuid
 
 from flask import session as flask_session
 
+import config
 from config import (
     sessions_status,
     sessions_lock,
     queue_items,
     queue_items_lock,
     MAX_PROCESSING_TIME,
-    NUM_WORKERS,
 )
 
 
@@ -191,7 +191,7 @@ def get_queue_items_list():
                 processing_count += 1
                 # If we have more processing items than workers, something is wrong
                 # Mark excess items as waiting (should not happen with the fixes)
-                if processing_count > NUM_WORKERS:
+                if processing_count > config.NUM_WORKERS:
                     print(f"⚠️ Too many processing items detected! Resetting {filename} to waiting")
                     info['status'] = 'waiting'
                     info['worker'] = None
