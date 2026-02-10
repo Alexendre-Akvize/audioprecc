@@ -978,8 +978,9 @@ def process_single_track(filepath, filename, session_id='global', worker_id=None
                 returncode, demucs_output = run_demucs_with_device('cpu')
             
             if returncode != 0:
-                error_lines = ''.join(demucs_output[-10:])
-                error_msg = f"Erreur Demucs (code {returncode}): {error_lines[:200]}"
+                error_lines = ''.join(demucs_output[-20:])
+                # Show a longer snippet in logs so the real error is visible
+                error_msg = f"Erreur Demucs (code {returncode}): {error_lines[:500]}"
                 log_message(f"❌ {error_msg}", session_id)
                 print(f"DEMUCS ERROR OUTPUT:\n{error_lines}")
                 last_error = error_msg

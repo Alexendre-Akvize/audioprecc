@@ -124,10 +124,10 @@ print(f"📦 Batch tracking: {'ENABLED' if cfg.BATCH_MODE_ENABLED else 'DISABLED
       f"(milestone every {cfg.BATCH_SIZE} tracks, no pause)")
 print(f"⏰ Delayed delete: {'ENABLED' if cfg.DELAYED_DELETE_ENABLED else 'DISABLED'} "
       f"({cfg.DELAYED_DELETE_MINUTES}min after download)")
-
-# =============================================================================
+    
+    # =============================================================================
 # 5. HELPER (kill jupyter before start)
-# =============================================================================
+    # =============================================================================
 
 def kill_jupyter():
     """Kill any running Jupyter processes to free up resources."""
@@ -171,9 +171,9 @@ if __name__ == '__main__':
         help='Run in development mode with Flask dev server',
     )
     args = parser.parse_args()
-
+    
     kill_jupyter()
-
+    
     if args.dev or args.debug:
         print(f"🔧 Starting ID By Rivoli in DEVELOPMENT mode on port {args.port}")
         app.run(host='0.0.0.0', port=args.port, debug=True)

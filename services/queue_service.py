@@ -83,7 +83,7 @@ def log_message(message, session_id=None):
     timestamp = time.strftime("%H:%M:%S")
     
     # Log to specific session if provided
-    if session_id:
+    if session_id and session_id != 'global':
         status = get_job_status(session_id)
         status['logs'].append(f"[{timestamp}] {message}")
         if len(status['logs']) > 1000:
