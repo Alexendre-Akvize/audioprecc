@@ -808,10 +808,24 @@ class PrismaDatabaseService:
                     if matched_album.id not in existing_ids:
                         update_data['Album'] = {'connect': [{'id': matched_album.id}]}
                 
-                updated_track = self.db.track.update(
-                    where={'id': existing_track.id},
-                    data=update_data
-                )
+                try:
+                    updated_track = self.db.track.update(
+                        where={'id': existing_track.id},
+                        data=update_data
+                    )
+                except Exception as prisma_err:
+                    err_str = str(prisma_err)
+                    # If waveform JSON field doesn't exist in generated client, retry without it
+                    if 'Could not find field' in err_str and waveform_json_field and waveform_json_field in update_data:
+                        print(f"   ⚠️ Field '{waveform_json_field}' not in Prisma client — retrying without waveform (run 'prisma generate' to fix)")
+                        update_data.pop(waveform_json_field, None)
+                        update_data.pop('duration', None)  # Also remove duration if it was added for waveform
+                        updated_track = self.db.track.update(
+                            where={'id': existing_track.id},
+                            data=update_data
+                        )
+                    else:
+                        raise
                 
                 print(f"   ✅ Track updated: {updated_track.id}")
                 return {'trackId': base_track_id, 'id': updated_track.id, 'action': 'updated'}
@@ -875,7 +889,18 @@ class PrismaDatabaseService:
                 if matched_album:
                     create_data['Album'] = {'connect': [{'id': matched_album.id}]}
                 
-                created_track = self.db.track.create(data=create_data)
+                try:
+                    created_track = self.db.track.create(data=create_data)
+                except Exception as prisma_err:
+                    err_str = str(prisma_err)
+                    # If waveform JSON field doesn't exist in generated client, retry without it
+                    if 'Could not find field' in err_str and waveform_json_field and waveform_json_field in create_data:
+                        print(f"   ⚠️ Field '{waveform_json_field}' not in Prisma client — retrying without waveform (run 'prisma generate' to fix)")
+                        create_data.pop(waveform_json_field, None)
+                        create_data.pop('duration', None)
+                        created_track = self.db.track.create(data=create_data)
+                    else:
+                        raise
                 
                 print(f"   ✅ Track created: {created_track.id}")
                 return {'trackId': base_track_id, 'id': created_track.id, 'action': 'created'}
