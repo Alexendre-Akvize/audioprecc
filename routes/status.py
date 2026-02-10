@@ -15,8 +15,6 @@ import config
 from config import (
     PROCESSED_FOLDER,
     OUTPUT_FOLDER,
-    DEMUCS_DEVICE,
-    FORCE_DEVICE,
     NUM_WORKERS,
     CPU_COUNT,
     track_queue,
