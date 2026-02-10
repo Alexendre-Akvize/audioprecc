@@ -124,6 +124,10 @@ print(f"📦 Batch tracking: {'ENABLED' if cfg.BATCH_MODE_ENABLED else 'DISABLED
       f"(milestone every {cfg.BATCH_SIZE} tracks, no pause)")
 print(f"⏰ Delayed delete: {'ENABLED' if cfg.DELAYED_DELETE_ENABLED else 'DISABLED'} "
       f"({cfg.DELAYED_DELETE_MINUTES}min after download)")
+
+# --- Auto-resume interrupted bulk import ---
+from routes.dropbox import auto_resume_bulk_import
+auto_resume_bulk_import()
     
     # =============================================================================
 # 5. HELPER (kill jupyter before start)

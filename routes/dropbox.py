@@ -31,6 +31,8 @@ from config import (
     bulk_import_lock,
     MEMORY_HIGH_THRESHOLD,
     MEMORY_CRITICAL_THRESHOLD,
+    save_bulk_import_pending,
+    clear_bulk_import_pending,
 )
 from services.dropbox_service import get_valid_dropbox_token, is_token_expired_error
 from services.queue_service import (
@@ -433,6 +435,9 @@ def start_bulk_import():
             'last_update': time.time()
         })
     
+    # Persist to disk so we can auto-resume after restart
+    save_bulk_import_pending(folder_path)
+    
     # Start background thread
     thread = threading.Thread(
         target=bulk_import_background_thread,
@@ -497,6 +502,67 @@ def stop_bulk_import():
         'success': True,
         'message': 'Stop requested. Import will stop after current file.'
     })
+
+
+def auto_resume_bulk_import():
+    """
+    Called on startup to check if a bulk import was interrupted (e.g. by worker restart).
+    If a pending import is found on disk, automatically resume it.
+    Already-processed files won't be re-processed because they were moved to /track done/.
+    """
+    from config import load_bulk_import_pending, BULK_IMPORT_STATE_FILE
+    
+    folder_path = load_bulk_import_pending()
+    if folder_path is None:
+        return  # No pending import
+    
+    print(f"\n{'='*60}")
+    print(f"🔄 AUTO-RESUME: Found interrupted bulk import for '{folder_path or '(root)'}'")
+    print(f"   Restarting automatically (already processed files will be skipped)...")
+    print(f"{'='*60}\n")
+    
+    load_dotenv(override=True)
+    
+    dropbox_token = get_valid_dropbox_token()
+    dropbox_team_member_id = os.environ.get('DROPBOX_TEAM_MEMBER_ID', '') or DROPBOX_TEAM_MEMBER_ID
+    
+    if not dropbox_token:
+        print("⚠️ AUTO-RESUME: Cannot resume - Dropbox token not available")
+        return
+    
+    # Reset state for fresh start
+    with bulk_import_lock:
+        bulk_import_state.update({
+            'active': True,
+            'stop_requested': False,
+            'folder_path': folder_path,
+            'namespace_id': '',
+            'started_at': time.time(),
+            'total_found': 0,
+            'scanning_found': 0,
+            'total_scanned': 0,
+            'downloaded': 0,
+            'processed': 0,
+            'failed': 0,
+            'skipped': 0,
+            'current_file': '🔄 Auto-resuming after restart...',
+            'current_status': 'resuming',
+            'files_queue': [],
+            'completed_files': [],
+            'failed_files': [],
+            'skipped_files': [],
+            'error': None,
+            'last_update': time.time()
+        })
+    
+    thread = threading.Thread(
+        target=bulk_import_background_thread,
+        args=(dropbox_token, dropbox_team_member_id, folder_path),
+        daemon=True
+    )
+    thread.start()
+    
+    print(f"🚀 AUTO-RESUME: Bulk import resumed for '{folder_path or '(root)'}'")
 
 
 def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_path):
@@ -581,6 +647,7 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                     bulk_import_state['current_status'] = 'stopped'
                     bulk_import_state['active'] = False
                     bulk_import_state['last_update'] = time.time()
+                    clear_bulk_import_pending()
                     print("⏹️ Bulk import stopped by user")
                     return
             
@@ -608,6 +675,7 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                         bulk_import_state['current_status'] = 'stopped'
                         bulk_import_state['active'] = False
                         bulk_import_state['last_update'] = time.time()
+                        clear_bulk_import_pending()
                         print("⏹️ Bulk import stopped during scan")
                         return
                 
@@ -703,6 +771,7 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                         bulk_import_state['current_status'] = 'complete'
                         bulk_import_state['active'] = False
                         bulk_import_state['last_update'] = time.time()
+                    clear_bulk_import_pending()
                     print(f"\n{'='*60}")
                     print(f"✅ BULK IMPORT COMPLETE - All files processed!")
                     print(f"   Processed: {bulk_import_state.get('processed', 0)}")
@@ -988,6 +1057,7 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                         if bulk_import_state['stop_requested']:
                             bulk_import_state['current_status'] = 'stopped'
                             bulk_import_state['active'] = False
+                            clear_bulk_import_pending()
                             print("⏹️ Bulk import stopped")
                             break
 
@@ -1126,6 +1196,7 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
             bulk_import_state['current_status'] = 'error'
             bulk_import_state['active'] = False
             bulk_import_state['last_update'] = time.time()
+        # NOTE: Do NOT clear pending file on error - let auto-resume retry on next startup
     
     # Final summary (only shown when manually stopped)
     print(f"\n{'='*60}")

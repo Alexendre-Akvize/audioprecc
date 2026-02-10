@@ -24,9 +24,12 @@ timeout = 1800  # 30 minutes for very large batches (1000+ tracks)
 graceful_timeout = 120
 keepalive = 30
 
-# Request limits - higher for high-RAM system
-max_requests = 5000  # More requests before recycling
-max_requests_jitter = 100
+# Request limits - DISABLED for single-worker GPU setup
+# With only 1 worker, max_requests kills ALL background threads (bulk import, 
+# GPU workers, etc.) when recycling. Memory management is handled by the 
+# app's own memory watchdog instead.
+max_requests = 0  # 0 = disabled (never auto-restart)
+max_requests_jitter = 0
 
 # Logging
 accesslog = "-"  # stdout
@@ -58,6 +61,11 @@ def on_starting(server):
 
 def on_exit(server):
     print("👋 ID By Rivoli Server Shutting Down...")
+
+def worker_exit(server, worker):
+    """Called when a worker exits. Log a warning if a bulk import was in progress."""
+    print(f"⚠️ Worker {worker.pid} exiting.")
+    print(f"   If a bulk import was running, it will auto-resume when the new worker boots.")
 
 def worker_int(worker):
     print(f"Worker {worker.pid} received INT signal")

@@ -5,6 +5,7 @@ All constants, environment variables, Flask app initialization,
 and shared mutable state (locks, queues, dictionaries) live here.
 """
 import os
+import time
 import threading
 import queue
 import multiprocessing
@@ -89,6 +90,7 @@ OUTPUT_FOLDER = os.path.join(BASE_DIR, 'output')
 PROCESSED_FOLDER = os.path.join(BASE_DIR, 'processed')
 DROPBOX_FOLDER = os.path.join(BASE_DIR, 'dropbox_downloads')
 HISTORY_FILE = os.path.join(BASE_DIR, 'upload_history.csv')
+BULK_IMPORT_STATE_FILE = os.path.join(BASE_DIR, 'bulk_import_pending.json')
 
 for folder in [UPLOAD_FOLDER, OUTPUT_FOLDER, PROCESSED_FOLDER, DROPBOX_FOLDER]:
     os.makedirs(folder, exist_ok=True)
@@ -183,6 +185,42 @@ bulk_import_state = {
     'last_update': None
 }
 bulk_import_lock = Lock()
+
+
+def save_bulk_import_pending(folder_path):
+    """Persist bulk import folder to disk so it can auto-resume after restart."""
+    import json as _json
+    try:
+        with open(BULK_IMPORT_STATE_FILE, 'w') as f:
+            _json.dump({
+                'folder_path': folder_path,
+                'started_at': time.time(),
+            }, f)
+    except Exception as e:
+        print(f"⚠️ Could not save bulk import state: {e}")
+
+
+def clear_bulk_import_pending():
+    """Remove the persistent bulk import state (import finished or stopped)."""
+    try:
+        if os.path.exists(BULK_IMPORT_STATE_FILE):
+            os.remove(BULK_IMPORT_STATE_FILE)
+    except Exception as e:
+        print(f"⚠️ Could not clear bulk import state file: {e}")
+
+
+def load_bulk_import_pending():
+    """Load a pending bulk import state from disk. Returns folder_path or None."""
+    import json as _json
+    try:
+        if os.path.exists(BULK_IMPORT_STATE_FILE):
+            with open(BULK_IMPORT_STATE_FILE, 'r') as f:
+                data = _json.load(f)
+            return data.get('folder_path', '')
+    except Exception as e:
+        print(f"⚠️ Could not load bulk import state: {e}")
+    return None
+
 
 # =============================================================================
 # API & DATABASE
