@@ -622,11 +622,17 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
     
     This maximizes throughput by keeping workers always busy.
     """
-    # Configuration - scale buffer based on worker count to avoid overwhelming resources
-    # Each queued track takes ~5-15MB disk + the worker uses ~2-4GB RAM for demucs
-    # Use 3 per worker so buffer doesn't pile up (80 items = all workers blocked on memory)
-    BUFFER_SIZE = max(5, config.NUM_WORKERS * 3)
-    DOWNLOAD_BATCH = max(2, config.NUM_WORKERS * 2)  # Download 2 per worker at a time
+    # Deemix upload-only: no processing queue → no buffer/batch limits (only Dropbox/disk limits)
+    with bulk_import_lock:
+        deemix_upload_only = bulk_import_state.get('deemix_upload_only', False)
+    if deemix_upload_only:
+        BUFFER_SIZE = 999999
+        DOWNLOAD_BATCH = 500
+    else:
+        # Configuration - scale buffer based on worker count to avoid overwhelming resources
+        # Each queued track takes ~5-15MB disk + the worker uses ~2-4GB RAM for demucs
+        BUFFER_SIZE = max(5, config.NUM_WORKERS * 3)
+        DOWNLOAD_BATCH = max(2, config.NUM_WORKERS * 2)  # Download 2 per worker at a time
     RESCAN_INTERVAL = 30  # Seconds to wait before rescanning for new files
     MAX_EMPTY_SCANS = 2  # Stop after N consecutive empty scans (0 = never stop)
     
@@ -1113,9 +1119,9 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
 
             file_index = 0
             iteration_downloaded = 0  # Per-iteration download counter (NOT accumulated across rescans)
-            download_threads = min(config.NUM_WORKERS, 10)  # Limit concurrent downloads
+            download_threads = 30 if deemix_upload_only else min(config.NUM_WORKERS, 10)  # Deemix: no DL limit except Dropbox
 
-            print(f"🚀 Starting pipeline with {download_threads} download threads")
+            print(f"🚀 Starting pipeline with {download_threads} download threads" + (" [deemix: no buffer limit]" if deemix_upload_only else ""))
 
             buffer_full_since = None  # When we first saw buffer full (for stalled-worker detection)
             last_processed_at_full = None
