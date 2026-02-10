@@ -581,8 +581,8 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
     """
     # Configuration - scale buffer based on worker count to avoid overwhelming resources
     # Each queued track takes ~5-15MB disk + the worker uses ~2-4GB RAM for demucs
-    # Keep buffer proportional to what workers can actually process
-    BUFFER_SIZE = max(5, config.NUM_WORKERS * 5)  # 5 tracks per worker (not 200 hardcoded)
+    # Use 3 per worker so buffer doesn't pile up (80 items = all workers blocked on memory)
+    BUFFER_SIZE = max(5, config.NUM_WORKERS * 3)
     DOWNLOAD_BATCH = max(2, config.NUM_WORKERS * 2)  # Download 2 per worker at a time
     RESCAN_INTERVAL = 30  # Seconds to wait before rescanning for new files
     MAX_EMPTY_SCANS = 2  # Stop after N consecutive empty scans (0 = never stop)
@@ -1050,6 +1050,9 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
 
             print(f"🚀 Starting pipeline with {download_threads} download threads")
 
+            buffer_full_since = None  # When we first saw buffer full (for stalled-worker detection)
+            last_processed_at_full = None
+
             try:
                 while True:
                     # Check for stop
@@ -1173,7 +1176,21 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
 
                     # If buffer is full or no more files, just wait and monitor
                     if current_queue_size >= BUFFER_SIZE:
+                        now = time.time()
+                        if buffer_full_since is None:
+                            buffer_full_since = now
+                            last_processed_at_full = processed
+                        elif now - buffer_full_since >= 90:
+                            # No progress for 90s while buffer full — workers may be stalled (e.g. all blocked on RAM)
+                            if processed == last_processed_at_full:
+                                print(f"⚠️  Buffer full for 90s with no progress (processed={processed}) — workers may be stalled. Forcing GC to free RAM...")
+                                force_garbage_collect("Bulk import buffer full - no progress")
+                            buffer_full_since = now
+                            last_processed_at_full = processed
                         print(f"⏸️  Buffer full ({current_queue_size}/{BUFFER_SIZE}), waiting for workers...")
+                    else:
+                        buffer_full_since = None
+                        last_processed_at_full = None
 
                     time.sleep(3)  # Wait before checking again
 

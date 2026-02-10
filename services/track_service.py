@@ -1125,9 +1125,9 @@ def get_optimal_workers():
             gpu_mem_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
             gpu_name = torch.cuda.get_device_name(0)
             
-            if gpu_mem_gb >= 70 and ram_gb >= 200:  # H100 + High RAM
-                num_workers = 16
-                print(f"🚀 H100 80GB + {ram_gb:.0f}GB RAM: {num_workers} parallel workers (MAXIMUM)")
+            if gpu_mem_gb >= 70 and ram_gb >= 200:  # H100 + High RAM — cap at 12 to avoid buffer deadlock / OOM
+                num_workers = 12
+                print(f"🚀 H100 80GB + {ram_gb:.0f}GB RAM: {num_workers} parallel workers")
             elif gpu_mem_gb >= 70:  # H100 80GB
                 num_workers = 12
                 print(f"🚀 H100 80GB: {num_workers} parallel workers")
