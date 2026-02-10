@@ -4666,6 +4666,23 @@
             }
         }
         
+        async function processDeemixPending() {
+            try {
+                const response = await fetch('/dropbox/deemix/process_pending', { method: 'POST' });
+                const data = await response.json();
+                if (!response.ok) {
+                    showToast(data.error || 'Failed to queue deemix processing', 'error');
+                    return;
+                }
+                showToast(data.message || `${data.queued} tracks queued for processing`, 'success');
+                document.getElementById('deemixProcessPendingWrap').style.display = 'none';
+                updateBulkImportStatus();
+            } catch (error) {
+                console.error('Error processing deemix pending:', error);
+                showToast('Error queueing deemix processing', 'error');
+            }
+        }
+        
         function showBulkImportPanel() {
             document.getElementById('bulkImportPanel').style.display = 'block';
             document.getElementById('bulkStopBtn').style.display = 'inline-flex';
