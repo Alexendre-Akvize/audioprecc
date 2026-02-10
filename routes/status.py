@@ -15,7 +15,6 @@ import config
 from config import (
     PROCESSED_FOLDER,
     OUTPUT_FOLDER,
-    NUM_WORKERS,
     CPU_COUNT,
     track_queue,
     queue_items,
@@ -105,7 +104,7 @@ def status():
     
     # Update queue info
     current_status['queue_size'] = track_queue.qsize()
-    current_status['num_workers'] = NUM_WORKERS
+    current_status['num_workers'] = config.NUM_WORKERS
     current_status['active_workers'] = sum(1 for t in worker_threads if t.is_alive())
     current_status['queue_items'] = get_queue_items_list()
     
@@ -294,7 +293,7 @@ def queue_debug():
     return jsonify({
         'total_items': len(queue_items),
         'queue_size': track_queue.qsize(),
-        'num_workers': NUM_WORKERS,
+        'num_workers': config.NUM_WORKERS,
         'active_workers': sum(1 for t in worker_threads if t.is_alive()),
         'items_by_status': items_by_status,
         'max_processing_time_seconds': MAX_PROCESSING_TIME
@@ -321,8 +320,8 @@ def system_stats():
             'available': False,
         },
         'processing': {
-            'device': DEMUCS_DEVICE,
-            'num_workers': NUM_WORKERS,
+            'device': config.DEMUCS_DEVICE,
+            'num_workers': config.NUM_WORKERS,
             'queue_size': track_queue.qsize(),
             'active_workers': sum(1 for t in worker_threads if t.is_alive()),
         },
@@ -530,9 +529,9 @@ def debug_cleanup():
 def debug_gpu():
     """Debug route to check GPU/CUDA status."""
     info = {
-        'demucs_device': DEMUCS_DEVICE,
-        'force_device_env': FORCE_DEVICE or 'auto',
-        'num_workers': NUM_WORKERS,
+        'demucs_device': config.DEMUCS_DEVICE,
+        'force_device_env': config.FORCE_DEVICE or 'auto',
+        'num_workers': config.NUM_WORKERS,
         'cpu_count': CPU_COUNT,
         'cuda_available': False,
         'cuda_version': None,
@@ -580,7 +579,7 @@ def debug_gpu():
                 info['gpu_memory_allocated_gb'] = round(torch.cuda.memory_allocated(0) / (1024**3), 2)
                 info['gpu_memory_reserved_gb'] = round(torch.cuda.memory_reserved(0) / (1024**3), 2)
                 
-                if DEMUCS_DEVICE == 'cpu':
+                if config.DEMUCS_DEVICE == 'cpu':
                     info['fix_suggestions'].append('GPU is available but Demucs is using CPU! Try restarting the app or set DEMUCS_FORCE_DEVICE=cuda in .env')
     except ImportError:
         info['error'] = 'PyTorch not installed'
@@ -588,7 +587,7 @@ def debug_gpu():
     except Exception as e:
         info['error'] = str(e)
     
-    if DEMUCS_DEVICE == 'cpu':
+    if config.DEMUCS_DEVICE == 'cpu':
         info['fix_suggestions'].append('Workaround: Add DEMUCS_FORCE_DEVICE=cuda to your .env file and restart')
     
     return jsonify(info)
