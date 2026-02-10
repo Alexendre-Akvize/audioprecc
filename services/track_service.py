@@ -606,6 +606,74 @@ def run_demucs_thread(filepaths, original_filenames):
 
 
 # =============================================================================
+# DEEMIX UPLOAD-ONLY: Metadata + upload Main MP3, no processing (process later)
+# =============================================================================
+
+def upload_deemix_main_only(local_path, filename, session_id='global'):
+    """
+    For deemix tracks in upload-only mode: copy MP3 to processed folder as Main,
+    send metadata to API (from file tags, no Demucs). Track stays in pending list
+    for "Process all deemix" later.
+    Returns: (success: bool, error_message: str or None)
+    """
+    import shutil
+    try:
+        original_audio = MP3(local_path, ID3=ID3)
+        original_tags = original_audio.tags
+        original_title = None
+        if original_tags and 'TIT2' in original_tags:
+            original_title = str(original_tags['TIT2'].text[0]) if original_tags['TIT2'].text else None
+    except Exception as e:
+        return False, f"Could not read metadata: {e}"
+
+    fallback_name, _ = clean_filename(filename)
+    if original_title:
+        metadata_base_name = re.sub(r'[<>:"/\\|?*]', '', original_title).strip()
+    else:
+        metadata_base_name = fallback_name
+    metadata_base_name = strip_trailing_bpm_and_key(metadata_base_name)
+    if len(metadata_base_name) > 200:
+        metadata_base_name = metadata_base_name[:200].strip()
+
+    bpm = None
+    try:
+        if original_tags and 'TBPM' in original_tags:
+            bpm_text = str(original_tags['TBPM'].text[0]).strip()
+            if bpm_text:
+                bpm = int(float(bpm_text))
+    except Exception:
+        pass
+    if bpm is None:
+        bpm = extract_bpm_from_filename(filename)
+
+    try:
+        track_output_dir = os.path.join(PROCESSED_FOLDER, metadata_base_name)
+        os.makedirs(track_output_dir, exist_ok=True)
+        out_name_mp3 = f"{metadata_base_name} - Main.mp3"
+        out_path_mp3 = os.path.join(track_output_dir, out_name_mp3)
+        shutil.copy2(local_path, out_path_mp3)
+
+        rel_path_mp3 = f"{metadata_base_name}/{out_name_mp3}"
+        mp3_url = f"/download_file?path={urllib.parse.quote(rel_path_mp3, safe='/')}"
+        track_info = {
+            'type': 'Main',
+            'format': 'MP3',
+            'name': f"{metadata_base_name} - Main",
+            'url': mp3_url,
+        }
+        track_data = prepare_track_metadata(track_info, local_path, bpm, allow_no_deezer=True)
+        if not track_data:
+            return False, "prepare_track_metadata returned None"
+        send_track_info_to_api(track_data)
+        log_message(f"✅ [deemix upload] {metadata_base_name} - Main (MP3) sent to API", session_id)
+        return True, None
+    except Exception as e:
+        error_msg = str(e)
+        log_message(f"❌ [deemix upload] {filename}: {error_msg}", session_id)
+        return False, error_msg
+
+
+# =============================================================================
 # PROCESS TRACK WITHOUT SEPARATION
 # =============================================================================
 
@@ -657,6 +725,12 @@ def process_track_without_separation(filepath, filename, track_type, session_id=
         if cleaned_base:
             metadata_base_name = cleaned_base
             log_message(f"📝 Cleaned base title: '{metadata_base_name}' (from type markers)")
+        
+        # Truncate base name to avoid ENAMETOOLONG / path too long (filesystem limits)
+        max_base_len = 200
+        if len(metadata_base_name) > max_base_len:
+            metadata_base_name = metadata_base_name[:max_base_len].strip()
+            log_message(f"📝 Base title truncated to {max_base_len} chars for path safety")
         
         # Get BPM from original metadata
         bpm = None
@@ -767,6 +841,15 @@ def process_track_without_separation(filepath, filename, track_type, session_id=
         current_status['progress'] = 100
         return True, None
         
+    except OSError as e:
+        errno_name = getattr(e, 'errno', None)
+        errno_str = f" errno={e.errno}" if errno_name is not None else ""
+        error_msg = f"Erreur export direct: {e.strerror or str(e)}{errno_str}"
+        log_message(f"❌ {error_msg} pour {filename}", session_id)
+        import traceback
+        traceback.print_exc()
+        _update_upload_history_status(filename, 'failed', error=error_msg)
+        return False, error_msg
     except Exception as e:
         error_msg = f"Erreur export direct: {str(e)}"
         log_message(f"❌ {error_msg} pour {filename}", session_id)
@@ -823,7 +906,7 @@ def process_single_track(filepath, filename, session_id='global', worker_id=None
                 remove_failed_file(session_id, filename)
             else:
                 add_failed_file(session_id, filename, error, filepath)
-                update_queue_item(filename, status='failed', progress=0, step=f'❌ {error[:50]}...')
+                update_queue_item(filename, status='failed', progress=0, step=f'❌ {(error[:80] + "…") if len(error) > 80 else error}')
             
             return success, error
             
@@ -1084,7 +1167,7 @@ def process_single_track(filepath, filename, session_id='global', worker_id=None
     _update_upload_history_status(filename, 'failed', error=final_error)
     
     # Update UI to show failure
-    update_queue_item(filename, status='failed', progress=0, step=f'❌ Échec: {last_error[:50]}...')
+    update_queue_item(filename, status='failed', progress=0, step=f'❌ Échec: {(last_error[:80] + "…") if len(last_error) > 80 else last_error}')
     
     return False, final_error
 
@@ -1273,7 +1356,8 @@ def worker(worker_id):
                 increment_batch_count()
             else:
                 # Update queue item to show failed status (process_single_track should have done this, but ensure it)
-                update_queue_item(filename, status='failed', progress=0, step=f'❌ {error_msg[:50] if error_msg else "Erreur inconnue"}...')
+                step_text = (error_msg[:80] + "…") if error_msg and len(error_msg) > 80 else (error_msg or "Erreur inconnue")
+                update_queue_item(filename, status='failed', progress=0, step=f'❌ {step_text}')
                 log_message(f"❌ [{session_id}] Worker {worker_id}: Échec pour {filename}: {error_msg}", session_id)
             
             track_queue.task_done()
@@ -1310,7 +1394,8 @@ def worker(worker_id):
                 try:
                     error_msg = f"Erreur worker: {str(e)[:100]}"
                     add_failed_file(current_session_id, current_filename, error_msg, None)
-                    update_queue_item(current_filename, status='failed', progress=0, step=f'❌ Crash: {str(e)[:50]}...')
+                    crash_msg = (str(e)[:80] + "…") if len(str(e)) > 80 else str(e)
+                    update_queue_item(current_filename, status='failed', progress=0, step=f'❌ Crash: {crash_msg}')
                     log_message(f"🔧 [{current_session_id}] Cleaned up crashed item: {current_filename}", current_session_id)
                 except Exception as cleanup_error:
                     print(f"Worker {worker_id} cleanup error: {cleanup_error}")

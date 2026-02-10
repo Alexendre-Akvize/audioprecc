@@ -1126,9 +1126,10 @@ def update_metadata_wav(filepath, artist, title, original_path, bpm):
 # API / DATABASE EXPORT
 # =============================================================================
 
-def prepare_track_metadata(edit_info, original_path, bpm, base_url=""):
+def prepare_track_metadata(edit_info, original_path, bpm, base_url="", allow_no_deezer=False):
     """
     Prepares track metadata for API export with absolute URLs.
+    If allow_no_deezer=True (e.g. deemix upload-only), sends metadata even without a Deezer match.
     """
     import config as _cfg
     
@@ -1287,10 +1288,12 @@ def prepare_track_metadata(edit_info, original_path, bpm, base_url=""):
         except Exception as e:
             print(f"   ⚠️ Deezer lookup failed: {e}")
         
-        # ─── FILTER: Skip if no Deezer match (confidence already enforced in search) ───
-        if not deezer_meta.get('deezer_id'):
+        # ─── FILTER: Skip if no Deezer match (unless allow_no_deezer for deemix upload-only) ───
+        if not deezer_meta.get('deezer_id') and not allow_no_deezer:
             print(f"   ⏭️ SKIPPED: No confident Deezer match - track not written to DB")
             return None
+        if not deezer_meta.get('deezer_id') and allow_no_deezer:
+            print(f"   📤 Deemix upload-only: sending with file metadata only (no Deezer match)")
         
         # Generate Track ID (clean format: no dashes, single underscores only)
         filename_raw = edit_info.get('name', '')

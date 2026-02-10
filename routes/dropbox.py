@@ -42,6 +42,7 @@ from services.queue_service import (
 )
 from services.memory_service import get_memory_percent, force_garbage_collect
 from services.metadata_service import process_track_title_for_import, delete_from_dropbox_if_skipped
+from services.track_service import upload_deemix_main_only
 from utils.file_utils import is_track_already_processed
 
 dropbox_bp = Blueprint('dropbox', __name__)
@@ -403,6 +404,8 @@ def start_bulk_import():
     
     data = request.json or {}
     folder_path = data.get('folder_path', '').strip()
+    # Deemix upload-only: use metadata + upload Main MP3 only; process variants when "Process all" is run
+    deemix_upload_only = data.get('deemix_upload_only', False) or ('deemix' in folder_path.lower())
     
     # Normalize path
     if folder_path and not folder_path.startswith('/'):
@@ -416,6 +419,8 @@ def start_bulk_import():
             'active': True,
             'stop_requested': False,
             'folder_path': folder_path,
+            'deemix_upload_only': deemix_upload_only,
+            'deemix_pending_processing': [],
             'namespace_id': '',
             'started_at': time.time(),
             'total_found': 0,
@@ -446,12 +451,13 @@ def start_bulk_import():
     )
     thread.start()
     
-    print(f"🚀 BULK IMPORT STARTED for folder: '{folder_path or '(root)'}'")
+    print(f"🚀 BULK IMPORT STARTED for folder: '{folder_path or '(root)'}'" + (" [DEEMIX UPLOAD-ONLY]" if deemix_upload_only else ""))
     
     return jsonify({
         'success': True,
         'message': f'Bulk import started for {folder_path or "entire Dropbox"}',
-        'status': 'starting'
+        'status': 'starting',
+        'deemix_upload_only': deemix_upload_only
     })
 
 
@@ -481,7 +487,9 @@ def get_bulk_import_status():
             'skipped_files': bulk_import_state['skipped_files'][-10:],  # Last 10 skipped
             'error': bulk_import_state['error'],
             'duration_seconds': duration,
-            'last_update': bulk_import_state['last_update']
+            'last_update': bulk_import_state['last_update'],
+            'deemix_upload_only': bulk_import_state.get('deemix_upload_only', False),
+            'deemix_pending_count': len(bulk_import_state.get('deemix_pending_processing', [])),
         })
 
 
@@ -501,6 +509,41 @@ def stop_bulk_import():
     return jsonify({
         'success': True,
         'message': 'Stop requested. Import will stop after current file.'
+    })
+
+
+@dropbox_bp.route('/dropbox/deemix/process_pending', methods=['POST'])
+def deemix_process_pending():
+    """
+    Queue all deemix upload-only tracks for processing (Demucs variants + waveform).
+    Call this after all deemix files have been uploaded in upload-only mode.
+    """
+    with bulk_import_lock:
+        pending = list(bulk_import_state.get('deemix_pending_processing', []))
+        bulk_import_state['deemix_pending_processing'] = []
+        bulk_import_state['last_update'] = time.time()
+    if not pending:
+        return jsonify({
+            'success': True,
+            'message': 'No deemix tracks pending processing',
+            'queued': 0
+        })
+    for item in pending:
+        filename = item.get('filename')
+        session_id = item.get('session_id', 'global')
+        if not filename:
+            continue
+        add_to_queue_tracker(filename, session_id)
+        track_queue.put({
+            'filename': filename,
+            'session_id': session_id,
+            'is_retry': False
+        })
+    log_message(f"🔄 [{session_id}] Deemix: {len(pending)} track(s) queued for processing (variants + waveform)")
+    return jsonify({
+        'success': True,
+        'message': f'{len(pending)} deemix track(s) queued for processing',
+        'queued': len(pending)
     })
 
 
@@ -868,17 +911,19 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                     safe_filename = safe_filename + extension
                     local_path = os.path.join(UPLOAD_FOLDER, safe_filename)
 
-                    # Add to queue tracker immediately
-                    with queue_items_lock:
-                        queue_items[safe_filename] = {
-                            'status': 'waiting',
-                            'worker': None,
-                            'progress': 0,
-                            'session_id': bulk_session_id,
-                            'step': '⬇️ Downloading...',
-                            'added_at': time.time(),
-                            'processing_started_at': None
-                        }
+                    deemix_upload_only = bulk_import_state.get('deemix_upload_only', False)
+                    # Add to queue tracker only when not deemix upload-only (no processing queue)
+                    if not deemix_upload_only:
+                        with queue_items_lock:
+                            queue_items[safe_filename] = {
+                                'status': 'waiting',
+                                'worker': None,
+                                'progress': 0,
+                                'session_id': bulk_session_id,
+                                'step': '⬇️ Downloading...',
+                                'added_at': time.time(),
+                                'processing_started_at': None
+                            }
 
                     # Download
                     download_headers = {
@@ -918,7 +963,29 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                     with files_lock:
                         iteration_downloaded += 1
 
-                    # Queue for processing
+                    # Deemix upload-only: metadata + upload Main MP3, no processing (process later via "Process all deemix")
+                    if deemix_upload_only:
+                        success, err = upload_deemix_main_only(local_path, safe_filename, bulk_session_id)
+                        if success:
+                            with completed_lock:
+                                completed_tracks.add(safe_filename)
+                            with bulk_import_lock:
+                                bulk_import_state['processed'] += 1
+                                bulk_import_state['deemix_pending_processing'].append({
+                                    'filename': safe_filename,
+                                    'session_id': bulk_session_id,
+                                })
+                                bulk_import_state['last_update'] = time.time()
+                            print(f"✅ [{current_index+1}/{len(all_files)}] {safe_filename} (deemix upload)")
+                        else:
+                            with bulk_import_lock:
+                                bulk_import_state['failed'] += 1
+                                bulk_import_state['failed_files'].append({'name': file_name, 'error': err or 'Upload failed'})
+                                bulk_import_state['last_update'] = time.time()
+                            print(f"❌ [{current_index+1}/{len(all_files)}] deemix upload failed: {safe_filename} - {err}")
+                        return {'status': 'ok' if success else 'failed', 'name': file_name, 'safe_filename': safe_filename}
+
+                    # Queue for processing (normal flow)
                     with queue_items_lock:
                         if safe_filename in queue_items:
                             queue_items[safe_filename]['step'] = 'En attente...'
