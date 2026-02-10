@@ -685,7 +685,6 @@ class PrismaDatabaseService:
                     
                 except Exception as e:
                     print(f"   ❌ S3 upload failed: {e}")
-                    import traceback
                     traceback.print_exc()
                     return {'error': f'S3 upload failed: {e}'}
             else:
@@ -743,11 +742,12 @@ class PrismaDatabaseService:
                 
                 # Generate waveform for audio fields (Main, Acapella, Intro, Instru, etc.)
                 # Map file_field → JSON waveform field name
-                waveform_json_field = 'jsonData' if file_field == 'trackFile' else f'{file_field}Json' if file_field else None
+                # trackFile and trackWav both use 'jsonData' (no separate trackWavJson in schema)
+                waveform_json_field = 'jsonData' if file_field in ('trackFile', 'trackWav') else f'{file_field}Json' if file_field else None
                 needs_waveform = (
                     not skip_waveform and WAVEFORM_AVAILABLE and file_url and waveform_json_field
                 )
-                if file_field == 'trackFile':
+                if file_field in ('trackFile', 'trackWav'):
                     needs_waveform = needs_waveform and (not existing_track.jsonData or not existing_track.duration)
                 # For non-main fields, always generate (check if json field is empty via getattr)
                 elif waveform_json_field:
@@ -760,8 +760,8 @@ class PrismaDatabaseService:
                         waveform_data = generate_waveform_from_url(file_url)
                         if waveform_data:
                             update_data[waveform_json_field] = PrismaJson(waveform_data['waveform'])
-                            # Only set duration on trackFile (main track duration)
-                            if file_field == 'trackFile':
+                            # Only set duration on main track fields
+                            if file_field in ('trackFile', 'trackWav'):
                                 update_data['duration'] = waveform_data['duration']
                             print(f"   ✅ Waveform added to {waveform_json_field}: {len(waveform_data['waveform'])} peaks, {waveform_data['duration']:.2f}s")
                     except Exception as e:
@@ -847,14 +847,15 @@ class PrismaDatabaseService:
                     create_data.update(cover_image_data)
                 
                 # Generate waveform for audio fields (Main, Acapella, Intro, Instru, etc.)
-                waveform_json_field = 'jsonData' if file_field == 'trackFile' else f'{file_field}Json' if file_field else None
+                # trackFile and trackWav both use 'jsonData' (no separate trackWavJson in schema)
+                waveform_json_field = 'jsonData' if file_field in ('trackFile', 'trackWav') else f'{file_field}Json' if file_field else None
                 if not skip_waveform and WAVEFORM_AVAILABLE and file_url and waveform_json_field:
                     try:
                         print(f"   📊 Generating waveform for {file_field}...")
                         waveform_data = generate_waveform_from_url(file_url)
                         if waveform_data:
                             create_data[waveform_json_field] = PrismaJson(waveform_data['waveform'])
-                            if file_field == 'trackFile':
+                            if file_field in ('trackFile', 'trackWav'):
                                 create_data['duration'] = waveform_data['duration']
                             print(f"   ✅ Waveform added to {waveform_json_field}: {len(waveform_data['waveform'])} peaks, {waveform_data['duration']:.2f}s")
                     except Exception as e:
