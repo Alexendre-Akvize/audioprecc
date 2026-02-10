@@ -282,6 +282,11 @@ def clean_detected_type_from_title(title, detected_type=None):
     # Remove trailing BPM and/or Camelot key (e.g., "10A 93", "1B", "102")
     cleaned = strip_trailing_bpm_and_key(cleaned)
     
+    # Remove "Radio Edit" markers - this is the main version, not a variant
+    # (Radio Edit), [Radio Edit], Radio-Edit, Radio Edit
+    cleaned = re.sub(r'\s*[\(\[]\s*radio\s+edit\s*[\)\]]', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\s*-\s*Radio[\s-]+Edit', '', cleaned, flags=re.IGNORECASE)
+    
     # Remove parenthetical and square bracket version/type markers
     # (Clean), (Dirty), (Inst), (Instrumental), [Clean], [Dirty], [Instrumental]
     cleaned = re.sub(r'\s*[\(\[]\s*(?:clean|dirty|inst(?:rumental)?)\s*[\)\]]', '', cleaned, flags=re.IGNORECASE)
@@ -528,8 +533,12 @@ def should_skip_track(title):
     
     title_lower = title.lower()
     
+    # "Radio Edit" = main version, must NOT be skipped by the 'edit' keyword
+    # Remove "radio edit" before checking skip keywords so it doesn't false-match
+    check_title = re.sub(r'radio\s+edit', '', title_lower)
+    
     for keyword in SKIP_KEYWORDS:
-        if keyword.lower() in title_lower:
+        if keyword.lower() in check_title:
             return True, f"Contains '{keyword}'"
     
     return False, None
@@ -567,6 +576,10 @@ def clean_track_title(title):
     cleaned = re.sub(r'\s+\d{1,2}[ABab]\s+\d{2,3}\s+(\([^)]+\))\s*$', r' \1', cleaned)
     cleaned = re.sub(r'\s+\d{2,3}\s+(\([^)]+\))\s*$', r' \1', cleaned)
     cleaned = re.sub(r'\s+\d{1,2}[ABab]\s+(\([^)]+\))\s*$', r' \1', cleaned)
+    
+    # 2b. Remove "Radio Edit" markers (Radio Edit = main version, not a variant)
+    cleaned = re.sub(r'\s*[\(\[]\s*radio\s+edit\s*[\)\]]', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\s*-\s*Radio[\s-]+Edit', '', cleaned, flags=re.IGNORECASE)
     
     # 3. Replace DJ/pool names with "ID By Rivoli" (case-insensitive)
     for dj_name in DJ_NAMES_TO_REPLACE:

@@ -715,11 +715,23 @@ class PrismaDatabaseService:
                 except Exception as e:
                     print(f"   ⚠️ Cover upload failed: {e}")
             
-            # Check if track exists
+            # Check if track exists — first by trackId, then fallback to ISRC
             existing_track = self.db.track.find_first(
                 where={'trackId': base_track_id},
                 include={'Artist': True, 'ReferenceArtist': True, 'Album': True}
             )
+            
+            # Fallback: if not found by trackId, try matching by ISRC to avoid duplicates
+            isrc_value = sanitized_data.get('ISRC', '').strip()
+            matched_by_isrc = False
+            if not existing_track and isrc_value:
+                existing_track = self.db.track.find_first(
+                    where={'ISRC': isrc_value},
+                    include={'Artist': True, 'ReferenceArtist': True, 'Album': True}
+                )
+                if existing_track:
+                    matched_by_isrc = True
+                    print(f"   🔗 Matched existing track by ISRC '{isrc_value}' (trackId: {existing_track.trackId})")
             
             if existing_track:
                 print(f"   📝 Updating existing track: {existing_track.id}")
@@ -828,7 +840,9 @@ class PrismaDatabaseService:
                         raise
                 
                 print(f"   ✅ Track updated: {updated_track.id}")
-                return {'trackId': base_track_id, 'id': updated_track.id, 'action': 'updated'}
+                effective_track_id = existing_track.trackId if matched_by_isrc else base_track_id
+                action = 'updated_via_isrc' if matched_by_isrc else 'updated'
+                return {'trackId': effective_track_id, 'id': updated_track.id, 'action': action}
             
             else:
                 print(f"   ➕ Creating new track with trackId: {base_track_id}")
