@@ -859,6 +859,11 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
 
             from concurrent.futures import ThreadPoolExecutor, as_completed
 
+            # Deemix: process in reverse order (newest first)
+            if deemix_upload_only:
+                all_files = list(reversed(all_files))
+                print(f"   Order: reverse (newest first)")
+
             print(f"\n{'='*60}")
             print(f"🚀 SMART PIPELINE STARTED")
             print(f"   Total files: {len(all_files)}")
