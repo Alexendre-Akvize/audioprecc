@@ -29,10 +29,22 @@ def get_valid_dropbox_token():
         if config.dropbox_current_token and config.dropbox_token_expires_at > current_time + 300:
             return config.dropbox_current_token
         
+        # Token expired or missing — attempt refresh
+        if config.dropbox_current_token and config.dropbox_token_expires_at > 0:
+            expired_ago = current_time - config.dropbox_token_expires_at
+            print(f"⚠️ Dropbox token expired {expired_ago:.0f}s ago — refreshing...")
+        
         # Try to refresh the token
         refresh_token = os.environ.get('DROPBOX_REFRESH_TOKEN', '') or DROPBOX_REFRESH_TOKEN
         app_key = os.environ.get('DROPBOX_APP_KEY', '') or DROPBOX_APP_KEY
         app_secret = os.environ.get('DROPBOX_APP_SECRET', '') or DROPBOX_APP_SECRET
+        
+        if not refresh_token:
+            print("❌ DROPBOX_REFRESH_TOKEN not set — cannot refresh token!")
+        if not app_key:
+            print("❌ DROPBOX_APP_KEY not set — cannot refresh token!")
+        if not app_secret:
+            print("❌ DROPBOX_APP_SECRET not set — cannot refresh token!")
         
         if refresh_token and app_key and app_secret:
             try:
@@ -43,31 +55,42 @@ def get_valid_dropbox_token():
                         'grant_type': 'refresh_token',
                         'refresh_token': refresh_token,
                     },
-                    auth=(app_key, app_secret)
+                    auth=(app_key, app_secret),
+                    timeout=30,
                 )
                 
                 if response.status_code == 200:
                     token_data = response.json()
-                    config.dropbox_current_token = token_data.get('access_token', '')
-                    expires_in = token_data.get('expires_in', 14400)  # Default 4 hours
-                    config.dropbox_token_expires_at = current_time + expires_in
-                    
-                    # Update environment variable for this session
-                    os.environ['DROPBOX_ACCESS_TOKEN'] = config.dropbox_current_token
-                    
-                    print(f"✅ Dropbox token refreshed! Expires in {expires_in // 3600}h {(expires_in % 3600) // 60}m")
-                    return config.dropbox_current_token
+                    new_token = token_data.get('access_token', '')
+                    if not new_token:
+                        print("❌ Token refresh returned empty access_token!")
+                    else:
+                        config.dropbox_current_token = new_token
+                        expires_in = token_data.get('expires_in', 14400)  # Default 4 hours
+                        config.dropbox_token_expires_at = current_time + expires_in
+                        
+                        # Update environment variable for this session
+                        os.environ['DROPBOX_ACCESS_TOKEN'] = config.dropbox_current_token
+                        
+                        print(f"✅ Dropbox token refreshed! Expires in {expires_in // 3600}h {(expires_in % 3600) // 60}m")
+                        return config.dropbox_current_token
                 else:
-                    print(f"❌ Token refresh failed: {response.status_code} - {response.text[:200]}")
+                    print(f"❌ Token refresh failed: HTTP {response.status_code} - {response.text[:300]}")
+            except requests.exceptions.Timeout:
+                print("❌ Token refresh timed out (30s) — Dropbox API may be down")
+            except requests.exceptions.ConnectionError as e:
+                print(f"❌ Token refresh connection error — no network? {e}")
             except Exception as e:
                 print(f"❌ Token refresh error: {e}")
         
-        # Fallback to current token (might be expired)
+        # Fallback to current token (might be expired — caller should handle 401)
         current_token = os.environ.get('DROPBOX_ACCESS_TOKEN', '') or DROPBOX_ACCESS_TOKEN
         if current_token:
+            print(f"⚠️ Using fallback token (may be expired) — length={len(current_token)}")
             config.dropbox_current_token = current_token
             return config.dropbox_current_token
         
+        print("❌ No Dropbox token available at all!")
         return ''
 
 

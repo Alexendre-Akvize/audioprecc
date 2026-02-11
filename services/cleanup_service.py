@@ -197,13 +197,84 @@ def delete_oldest_tracks(count):
     return deleted_count
 
 
+def cleanup_all_folders():
+    """
+    Aggressively clean ALL data folders (uploads, output, processed, htdemucs).
+    Called when the processed folder is already empty but disk is still over threshold.
+    Returns total bytes freed.
+    """
+    freed_bytes = 0
+    deleted_count = 0
+
+    folders_to_clean = [
+        (UPLOAD_FOLDER, "uploads"),
+        (OUTPUT_FOLDER, "output"),
+        (PROCESSED_FOLDER, "processed"),
+    ]
+
+    for folder, name in folders_to_clean:
+        if not os.path.exists(folder):
+            continue
+        for item in os.listdir(folder):
+            item_path = os.path.join(folder, item)
+            try:
+                if os.path.isfile(item_path) or os.path.islink(item_path):
+                    freed_bytes += os.path.getsize(item_path)
+                    os.unlink(item_path)
+                    deleted_count += 1
+                elif os.path.isdir(item_path):
+                    for dirpath, _dirnames, filenames in os.walk(item_path):
+                        for f in filenames:
+                            try:
+                                freed_bytes += os.path.getsize(os.path.join(dirpath, f))
+                            except Exception:
+                                pass
+                    shutil.rmtree(item_path)
+                    deleted_count += 1
+            except Exception as e:
+                print(f"   ⚠️ Could not delete {item_path}: {e}")
+
+    # Also clean covers folder
+    covers_folder = os.path.join(BASE_DIR, 'static', 'covers')
+    if os.path.exists(covers_folder):
+        for filename in os.listdir(covers_folder):
+            if filename.startswith('cover_'):
+                try:
+                    fp = os.path.join(covers_folder, filename)
+                    freed_bytes += os.path.getsize(fp)
+                    os.unlink(fp)
+                    deleted_count += 1
+                except Exception:
+                    pass
+
+    return freed_bytes, deleted_count
+
+
 def disk_monitor_loop():
     """Background thread that monitors disk usage and triggers cleanup when needed."""
+    # Cooldown: when cleanup finds nothing to delete, back off to avoid spamming
+    _nothing_to_clean_until = 0  # timestamp until which we skip cleanup
+    _COOLDOWN_SECONDS = 600      # 10 minutes cooldown when nothing left to clean
+    _last_warning_logged = 0     # throttle repeated log messages
+
     while True:
         try:
             usage = get_disk_usage_percent()
             
             if usage >= DISK_THRESHOLD_PERCENT:
+                now = time.time()
+
+                # If we're in cooldown (nothing to delete), only log every 10 min
+                if now < _nothing_to_clean_until:
+                    if now - _last_warning_logged >= _COOLDOWN_SECONDS:
+                        _log_message(
+                            f"⚠️ Disk still at {usage:.1f}% but nothing left to clean "
+                            f"— free space manually or raise DISK_THRESHOLD_PERCENT (currently {DISK_THRESHOLD_PERCENT}%)"
+                        )
+                        _last_warning_logged = now
+                    time.sleep(DISK_CHECK_INTERVAL_SECONDS)
+                    continue
+
                 print(f"")
                 print(f"⚠️ ════════════════════════════════════════════════")
                 print(f"⚠️ DISK USAGE ALERT: {usage:.1f}% (threshold: {DISK_THRESHOLD_PERCENT}%)")
@@ -217,6 +288,33 @@ def disk_monitor_loop():
                 if deleted > 0:
                     new_usage = get_disk_usage_percent()
                     _log_message(f"✅ Cleanup complete: {deleted} tracks deleted, disk now at {new_usage:.1f}%")
+                else:
+                    # Processed folder was empty — try cleaning all folders aggressively
+                    freed_bytes, extra_deleted = cleanup_all_folders()
+                    new_usage = get_disk_usage_percent()
+
+                    if extra_deleted > 0:
+                        freed_gb = freed_bytes / (1024 * 1024 * 1024)
+                        _log_message(
+                            f"🗑️ Deep cleanup: {extra_deleted} leftover files removed, "
+                            f"{freed_gb:.2f} GB freed, disk now at {new_usage:.1f}%"
+                        )
+                    else:
+                        # Nothing at all to delete — enter cooldown
+                        _nothing_to_clean_until = now + _COOLDOWN_SECONDS
+                        _last_warning_logged = now
+                        _log_message(
+                            f"ℹ️ Disk at {usage:.1f}% but no local files to clean. "
+                            f"Pausing cleanup checks for 10 min. "
+                            f"Free space manually or set DISK_THRESHOLD_PERCENT > {DISK_THRESHOLD_PERCENT}"
+                        )
+
+                    # If disk is STILL over threshold after all cleanup, enter cooldown
+                    if new_usage >= DISK_THRESHOLD_PERCENT and extra_deleted == 0:
+                        _nothing_to_clean_until = now + _COOLDOWN_SECONDS
+            else:
+                # Disk is below threshold — reset cooldown
+                _nothing_to_clean_until = 0
             
         except Exception as e:
             print(f"⚠️ Disk monitor error: {e}")

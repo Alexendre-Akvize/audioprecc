@@ -759,9 +759,10 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                     all_files = []  # Reset files list
                     continue  # Retry scan
                 
-                # Handle token expiration - refresh and retry
+                # Handle token expiration - force refresh and retry
                 if response.status_code == 401 or is_token_expired_error(response):
-                    print("🔄 Token expired during scan, refreshing...")
+                    print("🔄 Token expired during scan, forcing refresh...")
+                    config.dropbox_token_expires_at = 0  # Force refresh
                     dropbox_token = get_valid_dropbox_token()
                     headers['Authorization'] = f'Bearer {dropbox_token}'
                     continue  # Retry the request
@@ -878,6 +879,19 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                     return sum(1 for info in queue_items.values() 
                               if info.get('status') in ('waiting', 'processing'))
 
+            def _get_fresh_download_headers(path):
+                """Build download headers with a freshly validated Dropbox token."""
+                fresh_token = get_valid_dropbox_token()
+                dl_headers = {
+                    'Authorization': f'Bearer {fresh_token}',
+                    'Dropbox-API-Arg': json.dumps({'path': path})
+                }
+                if dropbox_team_member_id:
+                    dl_headers['Dropbox-API-Select-User'] = dropbox_team_member_id
+                if namespace_id:
+                    dl_headers['Dropbox-API-Path-Root'] = json.dumps({'.tag': 'namespace_id', 'namespace_id': namespace_id})
+                return dl_headers
+
             def download_single_file(file_info):
                 """Download a single file from Dropbox."""
                 file_name = file_info.get('name', 'unknown')
@@ -900,8 +914,9 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                     if title_result['skip']:
                         print(f"⏭️  [{current_index+1}/{len(all_files)}] SKIP: {file_name} ({title_result['skip_reason']})")
 
-                        # Delete from Dropbox
-                        delete_from_dropbox_if_skipped(dropbox_path, dropbox_token, dropbox_team_member_id, namespace_id)
+                        # Delete from Dropbox (use fresh token)
+                        fresh_token = get_valid_dropbox_token()
+                        delete_from_dropbox_if_skipped(dropbox_path, fresh_token, dropbox_team_member_id, namespace_id)
 
                         with bulk_import_lock:
                             bulk_import_state['skipped'] += 1
@@ -936,21 +951,25 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                                 'processing_started_at': None
                             }
 
-                    # Download
-                    download_headers = {
-                        'Authorization': f'Bearer {dropbox_token}',
-                        'Dropbox-API-Arg': json.dumps({'path': dropbox_path})
-                    }
-                    if dropbox_team_member_id:
-                        download_headers['Dropbox-API-Select-User'] = dropbox_team_member_id
-                    if namespace_id:
-                        download_headers['Dropbox-API-Path-Root'] = json.dumps({'.tag': 'namespace_id', 'namespace_id': namespace_id})
+                    # Download — get a fresh token and retry once on 401
+                    download_headers = _get_fresh_download_headers(dropbox_path)
 
                     response = requests.post(
                         'https://content.dropboxapi.com/2/files/download',
                         headers=download_headers,
                         stream=True
                     )
+
+                    # Retry once on token expiration
+                    if response.status_code == 401 or is_token_expired_error(response):
+                        print(f"🔄 [{current_index+1}] Token expired during download, refreshing...")
+                        config.dropbox_token_expires_at = 0  # Force refresh
+                        download_headers = _get_fresh_download_headers(dropbox_path)
+                        response = requests.post(
+                            'https://content.dropboxapi.com/2/files/download',
+                            headers=download_headers,
+                            stream=True
+                        )
 
                     if response.status_code != 200:
                         raise Exception(f'HTTP {response.status_code}')
@@ -1018,6 +1037,19 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                         bulk_import_state['last_update'] = time.time()
                     return {'status': 'failed', 'name': file_name, 'error': str(e)}
 
+            def _get_fresh_api_headers():
+                """Build API headers with a freshly validated Dropbox token."""
+                fresh_token = get_valid_dropbox_token()
+                api_headers = {
+                    'Authorization': f'Bearer {fresh_token}',
+                    'Content-Type': 'application/json'
+                }
+                if dropbox_team_member_id:
+                    api_headers['Dropbox-API-Select-User'] = dropbox_team_member_id
+                if namespace_id:
+                    api_headers['Dropbox-API-Path-Root'] = json.dumps({'.tag': 'namespace_id', 'namespace_id': namespace_id})
+                return api_headers
+
             def move_to_done_in_dropbox(filename):
                 """Move a file to /track done folder in Dropbox after successful processing."""
                 with dropbox_paths_lock:
@@ -1027,14 +1059,7 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                     return
 
                 try:
-                    move_headers = {
-                        'Authorization': f'Bearer {dropbox_token}',
-                        'Content-Type': 'application/json'
-                    }
-                    if dropbox_team_member_id:
-                        move_headers['Dropbox-API-Select-User'] = dropbox_team_member_id
-                    if namespace_id:
-                        move_headers['Dropbox-API-Path-Root'] = json.dumps({'.tag': 'namespace_id', 'namespace_id': namespace_id})
+                    move_headers = _get_fresh_api_headers()
 
                     # Move to /track done/ folder instead of deleting
                     dest_filename = os.path.basename(dropbox_path)
@@ -1050,6 +1075,23 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                             'allow_ownership_transfer': False
                         }
                     )
+
+                    # Retry once on token expiration
+                    if response.status_code == 401 or is_token_expired_error(response):
+                        print(f"🔄 Token expired during move, refreshing...")
+                        config.dropbox_token_expires_at = 0  # Force refresh
+                        move_headers = _get_fresh_api_headers()
+                        response = requests.post(
+                            'https://api.dropboxapi.com/2/files/move_v2',
+                            headers=move_headers,
+                            json={
+                                'from_path': dropbox_path,
+                                'to_path': dest_path,
+                                'autorename': True,
+                                'allow_ownership_transfer': False
+                            }
+                        )
+
                     if response.status_code == 200:
                         print(f"📦  Moved to /track done/: {filename}")
                     else:
