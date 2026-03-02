@@ -503,15 +503,30 @@ class PrismaDatabaseService:
     def find_or_create_album(self, album_name: str, release_date: str, 
                              reference_artists: List, label: Optional[str] = None,
                              sous_label: Optional[str] = None):
-        """Find or create an album by name."""
         if not album_name or not album_name.strip():
             return None
         
         try:
-            # Find existing album
-            album = self.db.album.find_first(
-                where={'nomAlbum': {'equals': album_name, 'mode': 'insensitive'}}
+            new_artist_ids = {a.id for a in reference_artists} if reference_artists else set()
+            
+            # Find all albums with this name, including their artists
+            candidates = self.db.album.find_many(
+                where={'nomAlbum': {'equals': album_name, 'mode': 'insensitive'}},
+                include={'ReferenceArtist': True}
             )
+            album = None
+            for candidate in candidates:
+                existing_artist_ids = {a.id for a in candidate.ReferenceArtist} if candidate.ReferenceArtist else set()
+                
+                if new_artist_ids and existing_artist_ids:
+                    if new_artist_ids & existing_artist_ids:
+                        album = candidate
+                        print(f"   📀 Album matched by name + artist overlap: '{album_name}'")
+                        break
+                elif not new_artist_ids and not existing_artist_ids:
+                    album = candidate
+                    break
+                # If one side has artists but there's no overlap, skip this candidate
             
             if album:
                 # Update with missing info
@@ -542,7 +557,10 @@ class PrismaDatabaseService:
                 
                 return album
             
-            # Create new album
+            # No matching album (or name matched but artists differ) → create new
+            if candidates:
+                print(f"   📀 Album name '{album_name}' exists but artists differ → creating separate album")
+            
             create_data = {
                 'nomAlbum': album_name,
                 'releaseDate': release_date or '',
@@ -720,6 +738,36 @@ class PrismaDatabaseService:
                 where={'trackId': base_track_id},
                 include={'Artist': True, 'ReferenceArtist': True, 'Album': True}
             )
+            
+            # Guard against homonym collision: same title, different artist
+            if existing_track:
+                existing_artist_names = set()
+                if existing_track.ReferenceArtist:
+                    existing_artist_names = {a.name.lower() for a in existing_track.ReferenceArtist}
+                if existing_track.originalArtist:
+                    existing_artist_names.add(existing_track.originalArtist.strip().lower())
+                
+                new_artist_names = set()
+                if matched_ref_artists:
+                    new_artist_names = {a.name.lower() for a in matched_ref_artists}
+                if artist_name:
+                    for part in self._split_artist_string(artist_name):
+                        new_artist_names.add(part.strip().lower())
+                
+                if existing_artist_names and new_artist_names and not (existing_artist_names & new_artist_names):
+                    # Different artist → this is a homonym, not the same track
+                    artist_suffix = re.sub(r'[^\w]', '_', artist_name)
+                    artist_suffix = re.sub(r'_+', '_', artist_suffix).strip('_')
+                    new_track_id = f"{base_track_id}_{artist_suffix}"
+                    print(f"   ⚠️ Homonym detected! Existing track by [{', '.join(existing_artist_names)}], new track by [{', '.join(new_artist_names)}]")
+                    print(f"   📝 Using unique trackId: {new_track_id}")
+                    base_track_id = new_track_id
+                    
+                    # Re-check with the new artist-qualified trackId
+                    existing_track = self.db.track.find_first(
+                        where={'trackId': base_track_id},
+                        include={'Artist': True, 'ReferenceArtist': True, 'Album': True}
+                    )
             
             # Fallback: if not found by trackId, try matching by ISRC to avoid duplicates
             isrc_value = sanitized_data.get('ISRC', '').strip()

@@ -653,6 +653,9 @@ def upload_deemix_main_only(local_path, filename, session_id='global'):
         out_path_mp3 = os.path.join(track_output_dir, out_name_mp3)
         shutil.copy2(local_path, out_path_mp3)
 
+        metadata_title = f"{metadata_base_name} - Main"
+        update_metadata(out_path_mp3, "ID By Rivoli", metadata_title, local_path, bpm)
+
         rel_path_mp3 = f"{metadata_base_name}/{out_name_mp3}"
         mp3_url = f"/download_file?path={urllib.parse.quote(rel_path_mp3, safe='/')}"
         track_info = {

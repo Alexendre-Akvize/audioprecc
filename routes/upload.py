@@ -53,6 +53,8 @@ from services.metadata_service import (
     strip_trailing_bpm_and_key,
     clean_detected_type_from_title,
     search_deezer_metadata,
+    update_metadata,
+    update_metadata_wav,
 )
 
 upload_bp = Blueprint('upload', __name__)
@@ -660,6 +662,12 @@ def upload_direct():
             os.remove(final_path)
         shutil.move(temp_path, final_path)
         
+        # Update metadata + embed ID By Rivoli cover in the file
+        if format_type == 'MP3':
+            update_metadata(final_path, "ID By Rivoli", track_title, final_path, bpm)
+        elif format_type == 'WAV':
+            update_metadata_wav(final_path, "ID By Rivoli", track_title, final_path, bpm)
+        
         # Generate track ID
         filename_clean = original_title.replace('-', ' ').replace('_', ' ')
         filename_clean = re.sub(r'\s+', ' ', filename_clean).strip()
@@ -932,6 +940,12 @@ def upload_direct_batch():
             if os.path.exists(final_path):
                 os.remove(final_path)
             shutil.move(temp_path, final_path)
+            
+            # Update metadata + embed ID By Rivoli cover in the file
+            if format_type == 'MP3':
+                update_metadata(final_path, "ID By Rivoli", track_title, final_path, bpm)
+            elif format_type == 'WAV':
+                update_metadata_wav(final_path, "ID By Rivoli", track_title, final_path, bpm)
             
             # Build URL
             rel_path = f"direct_upload/{safe_filename}"
