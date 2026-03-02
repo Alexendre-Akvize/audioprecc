@@ -1,11 +1,7 @@
-// Prisma schema for ID By Rivoli
-// This schema should match your existing database structure
-// Run `prisma db pull` to introspect and update from existing database
-
 generator client {
   provider             = "prisma-client-py"
   interface            = "sync"
-  recursive_type_depth = 5
+  recursive_type_depth = "5"
 }
 
 datasource db {
@@ -68,9 +64,11 @@ model User {
   Authenticator           Authenticator[]
   Bill                    Bill[]
   Blog                    Blog[]
+  ClapInLike              ClapInLike[]
   CommunicationPreference CommunicationPreference?
   Credit                  Credit?
   Download                Download[]
+  ExtendedLike            ExtendedLike[]
   ForumComment            ForumComment[]
   ForumPost               ForumPost[]
   ForumVideo              ForumVideo[]
@@ -80,11 +78,14 @@ model User {
   Like                    Like[]
   Listened                Listened[]
   Mix                     Mix[]
+  MixedLike               MixedLike[]
+  OriginalLike            OriginalLike[]
   Playlist                Playlist[]
   PressInformation        PressInformation?
   PressKit                PressKit[]
   Session                 Session[]
   ShortLike               ShortLike[]
+  SlamLike                SlamLike[]
   Subscription            Subscription?
   SuperShortLike          SuperShortLike[]
   Track                   Track[]
@@ -159,29 +160,32 @@ model Authenticator {
 }
 
 model Subscription {
-  id                   String    @id @default(cuid())
-  user                 String?   @unique
-  stripeId             String    @unique @default("")
-  plan                 String?
-  status               String?   @default("active")
-  price_id             String    @default("")
-  quantity             Int?
-  cancel_at_period_end DateTime?
-  cancel_at            DateTime?
-  canceled_at          DateTime?
-  current_period_start DateTime?
-  current_period_end   DateTime?
-  created              DateTime?
-  ended_at             DateTime?
-  trial_start          DateTime?
-  trial_end            DateTime?
-  currentPeriodEnd     DateTime?
-  createdAt            DateTime? @default(now())
-  updatedAt            DateTime? @default(now())
-  Plan                 Plan?     @relation(fields: [plan], references: [id])
-  User                 User?     @relation(fields: [user], references: [id])
+  id                      String    @id @default(cuid())
+  user                    String?   @unique
+  stripeId                String    @unique @default("")
+  plan                    String?
+  status                  String?   @default("active")
+  price_id                String    @default("")
+  quantity                Int?
+  cancel_at_period_end    DateTime?
+  cancel_at               DateTime?
+  canceled_at             DateTime?
+  current_period_start    DateTime?
+  current_period_end      DateTime?
+  created                 DateTime?
+  ended_at                DateTime?
+  trial_start             DateTime?
+  trial_end               DateTime?
+  currentPeriodEnd        DateTime?
+  createdAt               DateTime? @default(now())
+  updatedAt               DateTime? @default(now())
+  cancellationDescription String    @default("")
+  cancellationReason      String?
+  Plan                    Plan?     @relation(fields: [plan], references: [id])
+  User                    User?     @relation(fields: [user], references: [id])
 
   @@index([plan])
+  @@index([status])
 }
 
 model Credit {
@@ -396,15 +400,51 @@ model Track {
   slamIntroShortAcapOutWavJson                 Json?
   superShortJson                               Json?
   superShortWavJson                            Json?
+  variantISRCs                                 Json?              @default("{}")
+  cleanISRC                                    String             @default("")
+  dirtyISRC                                    String             @default("")
+  extendedISRC                                 String             @default("")
+  mixedISRC                                    String             @default("")
+  mixedTrackMp3Json                            Json?
+  mixedTrackMp3_filename                       String?
+  mixedTrackMp3_filesize                       Int?
+  mixedTrackWaveJson                           Json?
+  mixedTrackWave_filename                      String?
+  mixedTrackWave_filesize                      Int?
+  originalISRC                                 String             @default("")
+  extendedDuration                             Float?             @default(0)
+  acapInAcapOutMainDuration                    Float?             @default(0)
+  acapInDuration                               Float?             @default(0)
+  acapOutDuration                              Float?             @default(0)
+  acapellaDuration                             Float?             @default(0)
+  clapInMainDuration                           Float?             @default(0)
+  clapInShortAcapOutDuration                   Float?             @default(0)
+  instruDuration                               Float?             @default(0)
+  introDuration                                Float?             @default(0)
+  mixedDuration                                Float?             @default(0)
+  originalDuration                             Float?             @default(0)
+  shortAcapInDuration                          Float?             @default(0)
+  shortAcapOutDuration                         Float?             @default(0)
+  shortClapInDuration                          Float?             @default(0)
+  shortDuration                                Float?             @default(0)
+  shortMainDuration                            Float?             @default(0)
+  slamDirtyMainDuration                        Float?             @default(0)
+  slamIntroShortAcapOutDuration                Float?             @default(0)
+  superShortDuration                           Float?             @default(0)
   AccapellaLike                                AccapellaLike[]
+  ClapInLike                                   ClapInLike[]
   Download                                     Download[]
+  ExtendedLike                                 ExtendedLike[]
   InstrumentalLike                             InstrumentalLike[]
   IntroLike                                    IntroLike[]
   Like                                         Like[]
   Listened                                     Listened[]
   Mix                                          Mix[]
+  MixedLike                                    MixedLike[]
+  OriginalLike                                 OriginalLike[]
   Sample                                       Sample[]
   ShortLike                                    ShortLike[]
+  SlamLike                                     SlamLike[]
   SuperShortLike                               SuperShortLike[]
   User                                         User?              @relation(fields: [user], references: [id])
   VIPLike                                      VIPLike[]
@@ -423,6 +463,15 @@ model Track {
   UniversDetail                                UniversDetail[]    @relation("Track_universDetails")
 
   @@index([user])
+  @@index([bpm])
+  @@index([camelo])
+  @@index([createdAt])
+  @@index([downloadCount])
+  @@index([energyLevel])
+  @@index([listeningsCount])
+  @@index([rating])
+  @@index([status])
+  @@index([title])
 }
 
 model Tag {
@@ -475,6 +524,7 @@ model Blog {
   User            User?     @relation(fields: [user], references: [id])
 
   @@index([user])
+  @@index([publishedAt])
 }
 
 model Download {
@@ -488,6 +538,7 @@ model Download {
 
   @@index([track])
   @@index([user])
+  @@index([createdAt])
 }
 
 model Playlist {
@@ -524,6 +575,8 @@ model Playlist {
   Track                  Track[]   @relation("Playlist_tracks")
 
   @@index([user])
+  @@index([category])
+  @@index([createdAt])
 }
 
 model CommunicationPreference {
@@ -667,6 +720,11 @@ model Artist {
   Search                  Search[]          @relation("Artist_search")
   Track                   Track[]           @relation("Artist_tracks")
   User                    User[]            @relation("Artist_users")
+
+  @@index([artistType])
+  @@index([createdAt])
+  @@index([name])
+  @@index([uniqueName])
 }
 
 model Bill {
@@ -757,6 +815,9 @@ model ReferenceArtist {
   Track_ReferenceArtist_accapella    Track[]         @relation("ReferenceArtist_accapella")
   Track_ReferenceArtist_instrumental Track[]         @relation("ReferenceArtist_instrumental")
   Track                              Track[]         @relation("ReferenceArtist_tracks")
+
+  @@index([name])
+  @@index([popularity])
 }
 
 model Search {
@@ -768,6 +829,10 @@ model Search {
   Artist    Artist[]  @relation("Artist_search")
   Track     Track[]   @relation("Search_track")
   User      User[]    @relation("Search_user")
+
+  @@index([createdAt])
+  @@index([text])
+  @@index([type])
 }
 
 model BulkDownloadJob {
@@ -783,6 +848,9 @@ model BulkDownloadJob {
   processedTracks Int?      @default(0)
   progress        Int?      @default(0)
   totalTracks     Int?      @default(0)
+
+  @@index([status])
+  @@index([userId])
 }
 
 model EventDeduplication {
@@ -792,6 +860,8 @@ model EventDeduplication {
   source     String    @default("")
   timestamp  DateTime? @default(now())
   expires_at DateTime?
+
+  @@index([expires_at])
 }
 
 model OriginalTrack {
@@ -888,6 +958,8 @@ model Album {
   Track           Track[]           @relation("Album_Tracks")
   ReferenceArtist ReferenceArtist[] @relation("Album_artiste")
   OriginalTrack   OriginalTrack[]   @relation("Album_originalTracks")
+
+  @@index([nomAlbum])
 }
 
 model ForumCategory {
@@ -946,6 +1018,7 @@ model ForumPost {
 
   @@index([author])
   @@index([category])
+  @@index([createdAt])
 }
 
 model ForumVideo {
@@ -1446,4 +1519,80 @@ model SuperShortLike {
 
   @@index([track])
   @@index([user])
+}
+
+model ClapInLike {
+  id             String    @id
+  user           String?
+  track          String?
+  userId_trackId String    @unique @default("")
+  createdAt      DateTime? @default(now())
+  updatedAt      DateTime? @default(now())
+  Track          Track?    @relation(fields: [track], references: [id])
+  User           User?     @relation(fields: [user], references: [id])
+
+  @@index([track])
+  @@index([user])
+}
+
+model ExtendedLike {
+  id             String    @id
+  user           String?
+  track          String?
+  userId_trackId String    @unique @default("")
+  createdAt      DateTime? @default(now())
+  updatedAt      DateTime? @default(now())
+  Track          Track?    @relation(fields: [track], references: [id])
+  User           User?     @relation(fields: [user], references: [id])
+
+  @@index([track])
+  @@index([user])
+}
+
+model MixedLike {
+  id             String    @id
+  user           String?
+  track          String?
+  userId_trackId String    @unique @default("")
+  createdAt      DateTime? @default(now())
+  updatedAt      DateTime? @default(now())
+  Track          Track?    @relation(fields: [track], references: [id])
+  User           User?     @relation(fields: [user], references: [id])
+
+  @@index([track])
+  @@index([user])
+}
+
+model OriginalLike {
+  id             String    @id
+  user           String?
+  track          String?
+  userId_trackId String    @unique @default("")
+  createdAt      DateTime? @default(now())
+  updatedAt      DateTime? @default(now())
+  Track          Track?    @relation(fields: [track], references: [id])
+  User           User?     @relation(fields: [user], references: [id])
+
+  @@index([track])
+  @@index([user])
+}
+
+model SlamLike {
+  id             String    @id
+  user           String?
+  track          String?
+  userId_trackId String    @unique @default("")
+  createdAt      DateTime? @default(now())
+  updatedAt      DateTime? @default(now())
+  Track          Track?    @relation(fields: [track], references: [id])
+  User           User?     @relation(fields: [user], references: [id])
+
+  @@index([track])
+  @@index([user])
+}
+
+model doctrine_migration_versions {
+  version        String    @id @db.VarChar(191)
+  executed_at    DateTime? @db.Timestamp(0)
+  execution_time Int?
 }
