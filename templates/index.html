@@ -2057,12 +2057,6 @@
                             Ready to import
                         </div>
                         
-                        <!-- Deemix: Process pending (upload-only mode) -->
-                        <div id="deemixProcessPendingWrap" style="display: none; margin-top: 12px;">
-                            <button type="button" class="btn btn-primary" onclick="processDeemixPending()" id="deemixProcessPendingBtn" style="width: 100%;">
-                                <i data-lucide="play"></i> Process <span id="deemixPendingCount">0</span> deemix tracks (variants + waveform)
-                            </button>
-                        </div>
                     </div>
                 </div>
                 
@@ -2388,10 +2382,6 @@
                             </button>
                         </div>
                         <p class="dropbox-hint">Browse or Scan to preview files, or Import All to download and process entire folder (stops when done)</p>
-                        <label class="dropbox-option" style="display: flex; align-items: center; gap: 8px; margin-top: 10px; cursor: pointer;">
-                            <input type="checkbox" id="deemixUploadOnlyCheckbox" style="width: 16px; height: 16px;">
-                            <span>Deemix: upload only (MP3 Main from metadata → process variants when all uploaded)</span>
-                        </label>
                     </div>
                     
                     <!-- Bulk Import Status Panel (minimal - main display is in sidebar) -->
@@ -4619,20 +4609,16 @@
         async function startBulkImport() {
             const folderPath = document.getElementById('dropboxFolderPath').value.trim();
             
-            const deemixMode = document.getElementById('deemixUploadOnlyCheckbox').checked;
-            const confirmMsg = deemixMode
-                ? `🚀 DEEMIX UPLOAD-ONLY\n\nImport from "${folderPath || 'your entire Dropbox'}":\n\n• Download → read metadata → upload MP3 Main to API (no Demucs yet)\n• When all uploaded, click "Process deemix tracks" to generate variants + waveform\n• Auto-SKIP banned tracks. Clean titles.\n\nContinue?`
-                : `🚀 BULK IMPORT\n\nThis will import ALL audio files from "${folderPath || 'your entire Dropbox'}":\n\n• Downloads all MP3/WAV files from the folder\n• Processes each track through the normal workflow\n• Auto-SKIP banned tracks (Remix, Bootleg, Mashup, etc.)\n• Clean titles (replace DJ names → ID By Rivoli)\n• DELETE from Dropbox when done\n• Stops automatically when everything is processed\n\n⚠️ Files will be REMOVED from Dropbox after processing!\n\nContinue?`;
+            const confirmMsg = `🚀 BULK IMPORT\n\nThis will import ALL audio files from "${folderPath || 'your entire Dropbox'}":\n\n• Downloads all MP3/WAV files from the folder\n• Processes each track through the normal workflow\n• Auto-SKIP banned tracks (Remix, Bootleg, Mashup, etc.)\n• Clean titles (replace DJ names → ID By Rivoli)\n• DELETE from Dropbox when done\n• Stops automatically when everything is processed\n\n⚠️ Files will be REMOVED from Dropbox after processing!\n\nContinue?`;
             if (!confirm(confirmMsg)) {
                 return;
             }
             
             try {
-                const deemixUploadOnly = document.getElementById('deemixUploadOnlyCheckbox').checked;
                 const response = await fetch('/dropbox/bulk_import/start', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ folder_path: folderPath, deemix_upload_only: deemixUploadOnly })
+                    body: JSON.stringify({ folder_path: folderPath })
                 });
                 
                 const data = await response.json();
@@ -4666,22 +4652,6 @@
             }
         }
         
-        async function processDeemixPending() {
-            try {
-                const response = await fetch('/dropbox/deemix/process_pending', { method: 'POST' });
-                const data = await response.json();
-                if (!response.ok) {
-                    showToast(data.error || 'Failed to queue deemix processing', 'error');
-                    return;
-                }
-                showToast(data.message || `${data.queued} tracks queued for processing`, 'success');
-                document.getElementById('deemixProcessPendingWrap').style.display = 'none';
-                updateBulkImportStatus();
-            } catch (error) {
-                console.error('Error processing deemix pending:', error);
-                showToast('Error queueing deemix processing', 'error');
-            }
-        }
         
         function showBulkImportPanel() {
             document.getElementById('bulkImportPanel').style.display = 'block';
@@ -4871,20 +4841,6 @@
                 // Show/hide stop buttons
                 stopBtn.style.display = data.active ? 'inline-flex' : 'none';
                 document.getElementById('sidebarStopBtn').style.display = data.active ? 'inline-flex' : 'none';
-                
-                // Deemix upload-only: show "Process pending" when there are tracks to process
-                const deemixWrap = document.getElementById('deemixProcessPendingWrap');
-                const deemixCountEl = document.getElementById('deemixPendingCount');
-                const pendingCount = data.deemix_pending_count || 0;
-                if (deemixWrap && deemixCountEl) {
-                    if (data.deemix_upload_only && pendingCount > 0) {
-                        deemixWrap.style.display = 'block';
-                        deemixCountEl.textContent = pendingCount;
-                        lucide.createIcons();
-                    } else {
-                        deemixWrap.style.display = 'none';
-                    }
-                }
                 
                 // Handle completion/stop - keep showing card but update status
                 if (!data.active && data.status !== 'idle') {
