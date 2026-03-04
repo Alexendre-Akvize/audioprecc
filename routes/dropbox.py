@@ -41,7 +41,7 @@ from services.queue_service import (
     add_to_queue_tracker,
 )
 from services.memory_service import get_memory_percent, force_garbage_collect
-from services.metadata_service import process_track_title_for_import, delete_from_dropbox_if_skipped
+from services.metadata_service import process_track_title_for_import, delete_from_dropbox_if_skipped, detect_acap_type_from_filename
 from utils.file_utils import is_track_already_processed
 
 dropbox_bp = Blueprint('dropbox', __name__)
@@ -403,6 +403,7 @@ def start_bulk_import():
     
     data = request.json or {}
     folder_path = data.get('folder_path', '').strip()
+    import_mode = data.get('mode', 'full')  # 'full' or 'acap_only'
     
     # Normalize path
     if folder_path and not folder_path.startswith('/'):
@@ -417,6 +418,7 @@ def start_bulk_import():
             'stop_requested': False,
             'folder_path': folder_path,
             'namespace_id': '',
+            'import_mode': import_mode,
             'started_at': time.time(),
             'total_found': 0,
             'scanning_found': 0,
@@ -441,17 +443,19 @@ def start_bulk_import():
     # Start background thread
     thread = threading.Thread(
         target=bulk_import_background_thread,
-        args=(dropbox_token, dropbox_team_member_id, folder_path),
+        args=(dropbox_token, dropbox_team_member_id, folder_path, import_mode),
         daemon=True
     )
     thread.start()
     
-    print(f"🚀 BULK IMPORT STARTED for folder: '{folder_path or '(root)'}'")
+    mode_label = "ACAP ONLY" if import_mode == 'acap_only' else "BULK"
+    print(f"🚀 {mode_label} IMPORT STARTED for folder: '{folder_path or '(root)'}'")
     
     return jsonify({
         'success': True,
-        'message': f'Bulk import started for {folder_path or "entire Dropbox"}',
+        'message': f'{mode_label} import started for {folder_path or "entire Dropbox"}',
         'status': 'starting',
+        'mode': import_mode,
     })
 
 
@@ -468,6 +472,7 @@ def get_bulk_import_status():
             'active': bulk_import_state['active'],
             'status': bulk_import_state['current_status'],
             'folder_path': bulk_import_state['folder_path'],
+            'import_mode': bulk_import_state.get('import_mode', 'full'),
             'total_found': bulk_import_state['total_found'],
             'scanning_found': bulk_import_state.get('scanning_found', 0),
             'downloaded': bulk_import_state['downloaded'],
@@ -557,7 +562,7 @@ def auto_resume_bulk_import():
     
     thread = threading.Thread(
         target=bulk_import_background_thread,
-        args=(dropbox_token, dropbox_team_member_id, folder_path),
+        args=(dropbox_token, dropbox_team_member_id, folder_path, 'full'),
         daemon=True
     )
     thread.start()
@@ -565,7 +570,7 @@ def auto_resume_bulk_import():
     print(f"🚀 AUTO-RESUME: Bulk import resumed for '{folder_path or '(root)'}'")
 
 
-def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_path):
+def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_path, import_mode='full'):
     """
     CONTINUOUS SMART PIPELINE: Runs forever until manually stopped.
     
@@ -576,6 +581,10 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
     4. Move to /track done/ in Dropbox when processing succeeds
     5. When all done, wait and scan again for new files
     6. ONLY stops when manually interrupted or after consecutive empty scans
+    
+    Modes:
+    - 'full': Process all audio files (normal pipeline)
+    - 'acap_only': Only process Acap In / Acap Out files, skip everything else
     
     This maximizes throughput by keeping workers always busy.
     """
@@ -761,6 +770,18 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
             
             print(f"📦 Scan complete: {len(all_files)} audio files found")
             
+            # ACAP ONLY MODE: Filter to only keep Acap In / Acap Out files
+            if import_mode == 'acap_only':
+                pre_filter_count = len(all_files)
+                all_files = [f for f in all_files if detect_acap_type_from_filename(f.get('name', ''))]
+                filtered_out = pre_filter_count - len(all_files)
+                print(f"🎤 ACAP ONLY: Kept {len(all_files)} acap files, skipped {filtered_out} non-acap files")
+                with bulk_import_lock:
+                    bulk_import_state['total_found'] = len(all_files)
+                    bulk_import_state['scanning_found'] = len(all_files)
+                    bulk_import_state['files_queue'] = all_files.copy()
+                    bulk_import_state['last_update'] = time.time()
+            
             # If no files found, wait and rescan
             if len(all_files) == 0:
                 consecutive_empty_scans += 1
@@ -854,9 +875,10 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                             return {'status': 'stopped', 'name': file_name}
 
                     # TITLE FILTERING - Skip tracks with banned keywords
+                    # In acap_only mode, bypass skip-keyword filtering (we specifically want these files)
                     title_result = process_track_title_for_import(file_name)
 
-                    if title_result['skip']:
+                    if title_result['skip'] and import_mode != 'acap_only':
                         print(f"⏭️  [{current_index+1}/{len(all_files)}] SKIP: {file_name} ({title_result['skip_reason']})")
 
                         # Delete from Dropbox (use fresh token)

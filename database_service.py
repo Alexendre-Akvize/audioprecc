@@ -246,6 +246,10 @@ class PrismaDatabaseService:
         # Remove bracket-based markers from DJ pools
         # [Dirty Acapella], [Clean Acapella]
         result = re.sub(r'\s*\[\s*(?:Dirty|Clean)\s+Acapella\s*\]', '', result, flags=re.IGNORECASE)
+        # [Acap In & Out], [Acap In], [Acap Out], [Acapella Intro], [DJ Name Acap Out], etc.
+        result = re.sub(r'\s*\[\s*(?:[\w\s]*\s+)?acap(?:ella)?\s*(?:in(?:tro)?|out(?:ro)?)(?:\s*[&+]\s*(?:acap(?:ella)?\s*)?(?:in(?:tro)?|out(?:ro)?))?\s*\]', '', result, flags=re.IGNORECASE)
+        # [Acapella Loop], [Clapapella], [Verse], [Perfect Version]
+        result = re.sub(r'\s*\[\s*(?:acap(?:ella)?\s*loop|clapapella|verse|perfect\s*version)\s*\]', '', result, flags=re.IGNORECASE)
         # [Quick Hit Clean], [Quick Hit Dirty], [Quick Hit]
         result = re.sub(r'\s*\[\s*Quick\s*Hit(?:\s+(?:Clean|Dirty))?\s*\]', '', result, flags=re.IGNORECASE)
         # [Intro Clean], [Intro Dirty], [Intro], [XXX Intro]
@@ -255,6 +259,10 @@ class PrismaDatabaseService:
         
         # Remove parenthetical markers too
         result = re.sub(r'\s*\(\s*(?:Dirty|Clean)\s+Acapella\s*\)', '', result, flags=re.IGNORECASE)
+        # (Acap In & Out), (Acap In), (DJ Name Acap Out), etc.
+        result = re.sub(r'\s*\(\s*(?:[\w\s]*\s+)?acap(?:ella)?\s*(?:in(?:tro)?|out(?:ro)?)(?:\s*[&+]\s*(?:acap(?:ella)?\s*)?(?:in(?:tro)?|out(?:ro)?))?\s*\)', '', result, flags=re.IGNORECASE)
+        # (Acapella Loop), (Clapapella), (Verse), (Perfect Version)
+        result = re.sub(r'\s*\(\s*(?:acap(?:ella)?\s*loop|clapapella|verse|perfect\s*version)\s*\)', '', result, flags=re.IGNORECASE)
         result = re.sub(r'\s*\(\s*Quick\s*Hit(?:\s+(?:Clean|Dirty))?\s*\)', '', result, flags=re.IGNORECASE)
         result = re.sub(r'\s*\(\s*(?:[\w\s]*\s+)?Intro(?:\s+(?:Clean|Dirty))?(?:\s*-\s*(?:Clean|Dirty))?\s*\)', '', result, flags=re.IGNORECASE)
         result = re.sub(r'\s*\(\s*(?:Clean|Dirty|Inst(?:rumental)?|Acapella|Short|Extended)\s*\)', '', result, flags=re.IGNORECASE)
@@ -294,14 +302,21 @@ class PrismaDatabaseService:
         result = title
         
         # Remove square bracket version/type markers from DJ pools
-        # [Clean], [Dirty], [Instrumental], [Intro Clean/Dirty], [Quick Hit Clean/Dirty], [Dirty Acapella], etc.
         result = re.sub(r'\s*\[\s*(?:dirty|clean)\s+acapella\s*\]', '', result, flags=re.IGNORECASE)
+        # [Acap In & Out], [Acap In], [Acap Out], [DJ Name Acap Out]
+        result = re.sub(r'\s*\[\s*(?:[\w\s]*\s+)?acap(?:ella)?\s*(?:in(?:tro)?|out(?:ro)?)(?:\s*[&+]\s*(?:acap(?:ella)?\s*)?(?:in(?:tro)?|out(?:ro)?))?\s*\]', '', result, flags=re.IGNORECASE)
+        # [Acapella Loop], [Clapapella], [Verse], [Perfect Version]
+        result = re.sub(r'\s*\[\s*(?:acap(?:ella)?\s*loop|clapapella|verse|perfect\s*version)\s*\]', '', result, flags=re.IGNORECASE)
         result = re.sub(r'\s*\[\s*quick\s*hit(?:\s+(?:clean|dirty))?\s*\]', '', result, flags=re.IGNORECASE)
         result = re.sub(r'\s*\[\s*(?:[\w\s]*\s+)?intro(?:\s+(?:clean|dirty))?\s*\]', '', result, flags=re.IGNORECASE)
         result = re.sub(r'\s*\[\s*(?:clean|dirty|inst(?:rumental)?|acapella|short|extended)\s*\]', '', result, flags=re.IGNORECASE)
         
         # Remove parenthetical version/type markers
         result = re.sub(r'\s*\(\s*(?:dirty|clean)\s+acapella\s*\)', '', result, flags=re.IGNORECASE)
+        # (Acap In & Out), (Acap In), (DJ Name Acap Out)
+        result = re.sub(r'\s*\(\s*(?:[\w\s]*\s+)?acap(?:ella)?\s*(?:in(?:tro)?|out(?:ro)?)(?:\s*[&+]\s*(?:acap(?:ella)?\s*)?(?:in(?:tro)?|out(?:ro)?))?\s*\)', '', result, flags=re.IGNORECASE)
+        # (Acapella Loop), (Clapapella), (Verse), (Perfect Version)
+        result = re.sub(r'\s*\(\s*(?:acap(?:ella)?\s*loop|clapapella|verse|perfect\s*version)\s*\)', '', result, flags=re.IGNORECASE)
         result = re.sub(r'\s*\(\s*quick\s*hit(?:\s+(?:clean|dirty))?\s*\)', '', result, flags=re.IGNORECASE)
         result = re.sub(r'\s*\(\s*(?:[\w\s]*\s+)?intro(?:\s+(?:clean|dirty))?(?:\s*-\s*(?:clean|dirty))?\s*\)', '', result, flags=re.IGNORECASE)
         result = re.sub(r'\s*\(\s*(?:clean|dirty|inst(?:rumental)?|acapella|short|extended)\s*\)', '', result, flags=re.IGNORECASE)
@@ -781,6 +796,46 @@ class PrismaDatabaseService:
                     matched_by_isrc = True
                     print(f"   🔗 Matched existing track by ISRC '{isrc_value}' (trackId: {existing_track.trackId})")
             
+            # Fallback: match by base_title + artist (Spotify model — one record per song)
+            # Slowed/Speed Up are separate tracks, so they skip this fallback.
+            SEPARATE_TRACK_TYPES = {'slowed', 'speed up', 'sped up'}
+            matched_by_title = False
+            is_separate_type = track_type.lower() in SEPARATE_TRACK_TYPES if track_type else False
+            
+            if not existing_track and base_title and not is_separate_type:
+                title_where = {'title': {'equals': base_title, 'mode': 'insensitive'}}
+                
+                # Try title + artist first (strict match to avoid merging homonyms)
+                if artist_name:
+                    primary_artist = self._split_artist_string(artist_name)[0] if self._split_artist_string(artist_name) else artist_name
+                    candidate = self.db.track.find_first(
+                        where={
+                            'AND': [
+                                title_where,
+                                {'originalArtist': {'contains': primary_artist, 'mode': 'insensitive'}}
+                            ]
+                        },
+                        include={'Artist': True, 'ReferenceArtist': True, 'Album': True}
+                    )
+                    if candidate:
+                        existing_track = candidate
+                        matched_by_title = True
+                        print(f"   🔗 Matched existing track by title+artist: '{base_title}' / '{primary_artist}' (trackId: {existing_track.trackId})")
+                
+                # If no artist match, try title-only (for cases where artist field differs)
+                if not existing_track:
+                    candidates = self.db.track.find_many(
+                        where=title_where,
+                        include={'Artist': True, 'ReferenceArtist': True, 'Album': True},
+                        take=5
+                    )
+                    if len(candidates) == 1:
+                        existing_track = candidates[0]
+                        matched_by_title = True
+                        print(f"   🔗 Matched existing track by title (unique): '{base_title}' (trackId: {existing_track.trackId})")
+                    elif len(candidates) > 1:
+                        print(f"   ⚠️ Multiple tracks with title '{base_title}' ({len(candidates)} found) — skipping title fallback to avoid merge error")
+            
             if existing_track:
                 print(f"   📝 Updating existing track: {existing_track.id}")
                 print(f"   📁 Adding file field: {file_field}_filename = '{file_filename}'")
@@ -888,8 +943,13 @@ class PrismaDatabaseService:
                         raise
                 
                 print(f"   ✅ Track updated: {updated_track.id}")
-                effective_track_id = existing_track.trackId if matched_by_isrc else base_track_id
-                action = 'updated_via_isrc' if matched_by_isrc else 'updated'
+                effective_track_id = existing_track.trackId if (matched_by_isrc or matched_by_title) else base_track_id
+                if matched_by_title:
+                    action = 'updated_via_title'
+                elif matched_by_isrc:
+                    action = 'updated_via_isrc'
+                else:
+                    action = 'updated'
                 return {'trackId': effective_track_id, 'id': updated_track.id, 'action': action}
             
             else:

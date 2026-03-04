@@ -52,7 +52,7 @@ SKIP_KEYWORDS = [
     'countdown', 'private', 'party break',
     'sample', 'chill mix', 'kidcutup', 'kid cut up',
     'bounce back', 'chorus in', 'orchestral',
-    'da phonk', 'daphonk', 'epice intro', 'epic intro'
+    'da phonk', 'daphonk', 'epic intro', 'epic'
 ]
 
 # Note: 'Remix' is a special case - we might want to keep some remixes
@@ -91,6 +91,9 @@ DJ_NAMES_TO_REPLACE = [
     'Select Mix', 'SelectMix',
     'Ultimix',
     'Funkymix', 'Funky Mix',
+    'KidCutUp', 'Kid CutUp', 'Kid Cut Up',
+    'Latin Box', 'LatinBox', 'Latin-Box',
+    'Tall Boys', 'TallBoys', 'Tall-Boys',
 ]
 
 # Format standardization mappings
@@ -106,11 +109,17 @@ FORMAT_MAPPINGS = {
     'acap outro': 'Acap Out',
     'acapella in': 'Acap In',
     'acapella out': 'Acap Out',
+    'acapella loop': 'Acapella Loop',
+    'acap loop': 'Acapella Loop',
     'a cappella': 'Acapella',
     'a capella': 'Acapella',
     'acappella': 'Acapella',
     'acap': 'Acapella',
     'inst': 'Instrumental',
+    'clapapella': 'Clapapella',
+    'verse': 'Verse',
+    'perfect version': 'Perfect Version',
+    'tall boys hook extended': 'Perfect Version',
 }
 
 # Track types/versions to generate
@@ -139,6 +148,9 @@ def detect_track_type_from_title(title):
     Detected types (mapped to database fields via TYPE_TO_FILE_FIELD_MAP):
     - 'Instrumental' → instru
     - 'Acapella' → acapella
+    - 'Acap In' → acapIn
+    - 'Acap Out' → acapOut
+    - 'Acap In Acap Out' → acapInAcapOutMain
     - 'Extended' → extendedTrackMp3
     - 'Original Clean' → originalTrackMp3Clean
     - 'Original Dirty' → originalTrackMp3Dirty
@@ -157,11 +169,24 @@ def detect_track_type_from_title(title):
     if re.search(r'[\(\[]\s*inst(?:rumental)?\s*[\)\]]', title_lower):
         return 'Instrumental'
     
+    # Acap In & Out (combined) — must check before separate Acap In / Acap Out
+    # "Acap In & Out", "Acap In and Out", "(Acap In & Out)"
+    if re.search(r'acap(?:ella)?\s*in\s*[&+]\s*out', title_lower):
+        return 'Acap In Acap Out'
+    
+    # [Acap In] or (Acap In) or (Acapella Intro) or "Acap Intro" or "Acap In"
+    if re.search(r'[\(\[]\s*(?:[\w\s]*\s+)?acap(?:ella)?\s*(?:in(?:tro)?)\s*[\)\]]', title_lower):
+        return 'Acap In'
+    
+    # [Acap Out] or (Acap Out) or (Acapella Outro) or "& Acap Out"
+    if re.search(r'[\(\[]\s*(?:[\w\s]*\s+)?acap(?:ella)?\s*(?:out(?:ro)?)\s*[\)\]]', title_lower):
+        return 'Acap Out'
+    
     # [Dirty Acapella] or [Clean Acapella] or (Dirty Acapella) or (Clean Acapella)
     if re.search(r'[\(\[]\s*(?:dirty|clean)\s+acapella\s*[\)\]]', title_lower):
         return 'Acapella'
     
-    # [Acapella] or (Acapella) or [Acap] or (Acap)
+    # [Acapella] or (Acapella) or [Acap] or (Acap) — generic, no in/out suffix
     if re.search(r'[\(\[]\s*acap(?:ella)?\s*[\)\]]', title_lower):
         return 'Acapella'
     
@@ -181,6 +206,22 @@ def detect_track_type_from_title(title):
     if re.search(r'[\(\[]\s*short\s*[\)\]]', title_lower):
         return 'Short'
     
+    # [Clapapella] or (Clapapella)
+    if re.search(r'[\(\[]\s*clapapella\s*[\)\]]', title_lower):
+        return 'Clapapella'
+    
+    # [Acapella Loop] or (Acapella Loop) or [Acap Loop]
+    if re.search(r'[\(\[]\s*acap(?:ella)?\s*loop\s*[\)\]]', title_lower):
+        return 'Acapella Loop'
+    
+    # [Verse] or (Verse)
+    if re.search(r'[\(\[]\s*verse\s*[\)\]]', title_lower):
+        return 'Verse'
+    
+    # [Perfect Version] or (Perfect Version)
+    if re.search(r'[\(\[]\s*perfect\s*version\s*[\)\]]', title_lower):
+        return 'Perfect Version'
+    
     # [Extended] or (Extended)
     if re.search(r'[\(\[]\s*extended\s*[\)\]]', title_lower):
         return 'Extended'
@@ -196,10 +237,71 @@ def detect_track_type_from_title(title):
     # === General keywords (less specific, no brackets needed) ===
     if 'instrumental' in title_lower or '(inst)' in title_lower or '[inst]' in title_lower:
         return 'Instrumental'
-    elif 'acapella' in title_lower or 'a capella' in title_lower or 'acappella' in title_lower or re.search(r'\bacap\b', title_lower):
+    
+    # Acap In & Out (unbracketed) — "Acap In & Out Clean 102"
+    if re.search(r'\bacap(?:ella)?\s+in\s*[&+]\s*out\b', title_lower):
+        return 'Acap In Acap Out'
+    # Acap In / Acap Intro (unbracketed) — "Dj Smerk Acap Intro 103", "Acap In Clean"
+    if re.search(r'\bacap(?:ella)?\s+in(?:tro)?\b', title_lower):
+        return 'Acap In'
+    # Acap Out / Acap Outro (unbracketed) — "& Acap Out Dirty 97"
+    if re.search(r'\bacap(?:ella)?\s+out(?:ro)?\b', title_lower):
+        return 'Acap Out'
+    
+    # Acapella Loop — "Acapella Loop", "Acap Loop"
+    if re.search(r'\bacap(?:ella)?\s+loop\b', title_lower):
+        return 'Acapella Loop'
+    
+    # Clapapella
+    if 'clapapella' in title_lower:
+        return 'Clapapella'
+    
+    # Verse
+    if re.search(r'[\(\[]\s*verse\s*[\)\]]', title_lower) or re.search(r'\bverse\b', title_lower):
+        return 'Verse'
+    
+    # Perfect Version / "Tall Boys Hook Extended"
+    if 'perfect version' in title_lower or 'tall boys hook extended' in title_lower:
+        return 'Perfect Version'
+    
+    if 'acapella' in title_lower or 'a capella' in title_lower or 'acappella' in title_lower or re.search(r'\bacap\b', title_lower):
         return 'Acapella'
     elif 'extended' in title_lower:
         return 'Extended'
+    
+    return None
+
+
+def detect_acap_type_from_filename(filename):
+    """
+    Detect if a filename is an Acap In, Acap Out, or Acap In & Out file.
+    
+    Used by the "Acap Only" import mode to filter Dropbox files.
+    
+    Returns: 'Acap In', 'Acap Out', 'Acap In Acap Out', or None.
+    
+    Examples:
+    - 'Bruno Mars - I Just Might - Dj Smerk Acap Intro 103.mp3'     → 'Acap In'
+    - 'Fuego - Una Vaina Loca (Dj Ronald Acap Out) (Clean) 117.mp3' → 'Acap Out'
+    - '310babii - She Gon Drop Dj Oio Acap In & Out Clean 102'      → 'Acap In Acap Out'
+    - 'Angel - Ven Bailalo Dj Ronald Slam Intro & Acap Out Dirty 97' → 'Acap Out'
+    """
+    if not filename:
+        return None
+    
+    name_lower = filename.lower()
+    
+    # "Acap In & Out" or "Acap In and Out" → combined
+    if re.search(r'\bacap(?:ella)?\s+in\s*[&+]\s*out\b', name_lower):
+        return 'Acap In Acap Out'
+    
+    # "Acap Intro", "Acap In", "Acapella Intro"
+    if re.search(r'\bacap(?:ella)?\s+in(?:tro)?\b', name_lower):
+        return 'Acap In'
+    
+    # "Acap Out", "Acap Outro", "Acapella Outro", "& Acap Out"
+    if re.search(r'\bacap(?:ella)?\s+out(?:ro)?\b', name_lower):
+        return 'Acap Out'
     
     return None
 
@@ -294,8 +396,24 @@ def clean_detected_type_from_title(title, detected_type=None):
     # [Dirty Acapella], [Clean Acapella], (Dirty Acapella), (Dirty Acap)
     cleaned = re.sub(r'\s*[\(\[]\s*(?:dirty|clean)\s+acap(?:ella)?\s*[\)\]]', '', cleaned, flags=re.IGNORECASE)
     
+    # (Acap In & Out), (Acap In), (Acap Out), (Acapella Intro), (Acapella Outro)
+    # Also handles DJ name prefix: (Dj Ronald Acap Out), (Dj Ronald Melody In & Acap Out)
+    cleaned = re.sub(r'\s*[\(\[]\s*(?:[\w\s]*\s+)?acap(?:ella)?\s*(?:in(?:tro)?|out(?:ro)?)(?:\s*[&+]\s*(?:acap(?:ella)?\s*)?(?:in(?:tro)?|out(?:ro)?))?\s*[\)\]]', '', cleaned, flags=re.IGNORECASE)
+    
+    # [Acapella Loop], (Acapella Loop), [Acap Loop]
+    cleaned = re.sub(r'\s*[\(\[]\s*acap(?:ella)?\s*loop\s*[\)\]]', '', cleaned, flags=re.IGNORECASE)
+    
     # [Acapella], (Acapella), [Acap], (Acap)
     cleaned = re.sub(r'\s*[\(\[]\s*acap(?:ella)?\s*[\)\]]', '', cleaned, flags=re.IGNORECASE)
+    
+    # [Clapapella], (Clapapella)
+    cleaned = re.sub(r'\s*[\(\[]\s*clapapella\s*[\)\]]', '', cleaned, flags=re.IGNORECASE)
+    
+    # [Verse], (Verse)
+    cleaned = re.sub(r'\s*[\(\[]\s*verse\s*[\)\]]', '', cleaned, flags=re.IGNORECASE)
+    
+    # [Perfect Version], (Perfect Version)
+    cleaned = re.sub(r'\s*[\(\[]\s*perfect\s*version\s*[\)\]]', '', cleaned, flags=re.IGNORECASE)
     
     # [Quick Hit Clean], [Quick Hit Dirty], [Quick Hit], (Quick Hit)
     cleaned = re.sub(r'\s*[\(\[]\s*quick\s*hit(?:\s+(?:clean|dirty))?\s*[\)\]]', '', cleaned, flags=re.IGNORECASE)
@@ -320,7 +438,8 @@ def clean_detected_type_from_title(title, detected_type=None):
     edit_keywords = [
         'remix', 'edit', 'intro', 'outro', 'transition', 'hype', 'club',
         'bootleg', 'mashup', 'blend', 'rework', 'redrum', 'flip',
-        'version', 'mix', 'dub', 'vip', 'break intro', 'slam'
+        'version', 'mix', 'dub', 'vip', 'break intro', 'slam',
+        'acap', 'acapella',
     ]
     if ' - ' in cleaned:
         parts = cleaned.rsplit(' - ', 1)
@@ -595,9 +714,10 @@ def clean_track_title(title):
     # 5. Add "ID By Rivoli" to format parentheses that don't have it
     # Patterns like (Intro), (Outro), (Short), (Acap In), etc.
     format_keywords = [
-        'Intro', 'Outro', 'Short', 'Acap In', 'Acap Out', 
-        'Acapella', 'Instrumental', 'Extended', 'Main', 
-        'Verse', 'Hook', 'Chorus', 'Break', 'Drop'
+        'Intro', 'Outro', 'Short', 'Acap In', 'Acap Out',
+        'Acapella', 'Acapella Loop', 'Instrumental', 'Extended', 'Main',
+        'Verse', 'Hook', 'Chorus', 'Break', 'Drop',
+        'Clapapella', 'Perfect Version',
     ]
     
     for keyword in format_keywords:
@@ -735,6 +855,10 @@ def extract_track_metadata(title):
     elif 'acapella' in title_lower or 'a capella' in title_lower:
         metadata['format_type'] = 'Acapella'
         metadata['is_acapella'] = True
+    elif 'clapapella' in title_lower:
+        metadata['format_type'] = 'Clapapella'
+    elif 'perfect version' in title_lower:
+        metadata['format_type'] = 'Perfect Version'
     elif 'short' in title_lower or 'quick hit' in title_lower:
         metadata['format_type'] = 'Short'
     elif 'intro' in title_lower:
