@@ -2380,8 +2380,12 @@
                                 <i data-lucide="download-cloud"></i>
                                 Import All
                             </button>
+                            <button class="btn btn-primary" onclick="startBulkImport('acap_only')" id="dropboxAcapBtn" style="background: linear-gradient(135deg, #8b5cf6, #a855f7);">
+                                <i data-lucide="mic"></i>
+                                Acap Only
+                            </button>
                         </div>
-                        <p class="dropbox-hint">Browse or Scan to preview files, or Import All to download and process entire folder (stops when done)</p>
+                        <p class="dropbox-hint">Browse or Scan to preview files, Import All for everything, or Acap Only to import only Acap In/Out files</p>
                     </div>
                     
                     <!-- Bulk Import Status Panel (minimal - main display is in sidebar) -->
@@ -4606,10 +4610,15 @@
         
         let bulkImportPolling = null;
         
-        async function startBulkImport() {
+        async function startBulkImport(mode = 'full') {
             const folderPath = document.getElementById('dropboxFolderPath').value.trim();
             
-            const confirmMsg = `🚀 BULK IMPORT\n\nThis will import ALL audio files from "${folderPath || 'your entire Dropbox'}":\n\n• Downloads all MP3/WAV files from the folder\n• Processes each track through the normal workflow\n• Auto-SKIP banned tracks (Remix, Bootleg, Mashup, etc.)\n• Clean titles (replace DJ names → ID By Rivoli)\n• DELETE from Dropbox when done\n• Stops automatically when everything is processed\n\n⚠️ Files will be REMOVED from Dropbox after processing!\n\nContinue?`;
+            let confirmMsg;
+            if (mode === 'acap_only') {
+                confirmMsg = `🎤 ACAP ONLY IMPORT\n\nThis will scan "${folderPath || 'your entire Dropbox'}" and import ONLY Acap In / Acap Out files:\n\n• Scans for files with "Acap In", "Acap Intro", "Acap Out", "Acap Outro" in the name\n• Skips all other files (they stay untouched in Dropbox)\n• Downloads matching files and adds them to existing tracks in the database\n• Moves processed files to /track done/\n\nContinue?`;
+            } else {
+                confirmMsg = `🚀 BULK IMPORT\n\nThis will import ALL audio files from "${folderPath || 'your entire Dropbox'}":\n\n• Downloads all MP3/WAV files from the folder\n• Processes each track through the normal workflow\n• Auto-SKIP banned tracks (Remix, Bootleg, Mashup, etc.)\n• Clean titles (replace DJ names → ID By Rivoli)\n• DELETE from Dropbox when done\n• Stops automatically when everything is processed\n\n⚠️ Files will be REMOVED from Dropbox after processing!\n\nContinue?`;
+            }
             if (!confirm(confirmMsg)) {
                 return;
             }
@@ -4618,23 +4627,24 @@
                 const response = await fetch('/dropbox/bulk_import/start', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ folder_path: folderPath })
+                    body: JSON.stringify({ folder_path: folderPath, mode: mode })
                 });
                 
                 const data = await response.json();
                 
                 if (!response.ok) {
-                    showToast(data.error || 'Failed to start bulk import', 'error');
+                    showToast(data.error || 'Failed to start import', 'error');
                     return;
                 }
                 
-                showToast('Bulk import started!', 'success');
+                const modeLabel = mode === 'acap_only' ? 'Acap Only' : 'Bulk';
+                showToast(`${modeLabel} import started!`, 'success');
                 showBulkImportPanel();
                 startBulkImportPolling();
                 
             } catch (error) {
-                console.error('Error starting bulk import:', error);
-                showToast('Error starting bulk import', 'error');
+                console.error('Error starting import:', error);
+                showToast('Error starting import', 'error');
             }
         }
         
@@ -4710,18 +4720,19 @@
                 
                 // Update status text
                 const queueSize = data.queue_size || 0;
+                const modePrefix = data.import_mode === 'acap_only' ? '🎤 Acap Only — ' : '';
                 const statusLabels = {
                     'idle': 'No import running',
-                    'starting': 'Starting...',
-                    'scanning': '🔍 Scanning Dropbox...',
-                    'downloading': `⬇️ Downloading... (buffer: ${queueSize}/200)`,
-                    'separating': `🎵 Processing... (buffer: ${queueSize}/200)`,
-                    'processing': `⚙️ Processing... (buffer: ${queueSize}/200)`,
-                    'watching': `🔄 Verifying no remaining files...`,
-                    'stopping': '⏸️ Stopping...',
-                    'stopped': '⏹️ Stopped',
-                    'complete': `✅ Done! ${data.processed || 0} tracks processed`,
-                    'error': '❌ Error'
+                    'starting': `${modePrefix}Starting...`,
+                    'scanning': `${modePrefix}🔍 Scanning Dropbox...`,
+                    'downloading': `${modePrefix}⬇️ Downloading... (buffer: ${queueSize}/200)`,
+                    'separating': `${modePrefix}🎵 Processing... (buffer: ${queueSize}/200)`,
+                    'processing': `${modePrefix}⚙️ Processing... (buffer: ${queueSize}/200)`,
+                    'watching': `${modePrefix}🔄 Verifying no remaining files...`,
+                    'stopping': `${modePrefix}⏸️ Stopping...`,
+                    'stopped': `${modePrefix}⏹️ Stopped`,
+                    'complete': `${modePrefix}✅ Done! ${data.processed || 0} tracks processed`,
+                    'error': `${modePrefix}❌ Error`
                 };
                 statusEl.textContent = statusLabels[data.status] || data.status;
                 
