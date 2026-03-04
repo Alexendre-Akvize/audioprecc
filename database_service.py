@@ -748,93 +748,67 @@ class PrismaDatabaseService:
                 except Exception as e:
                     print(f"   ⚠️ Cover upload failed: {e}")
             
-            # Check if track exists — first by trackId, then fallback to ISRC
-            existing_track = self.db.track.find_first(
-                where={'trackId': base_track_id},
-                include={'Artist': True, 'ReferenceArtist': True, 'Album': True}
-            )
-            
-            # Guard against homonym collision: same title, different artist
-            if existing_track:
-                existing_artist_names = set()
-                if existing_track.ReferenceArtist:
-                    existing_artist_names = {a.name.lower() for a in existing_track.ReferenceArtist}
-                if existing_track.originalArtist:
-                    existing_artist_names.add(existing_track.originalArtist.strip().lower())
-                
-                new_artist_names = set()
-                if matched_ref_artists:
-                    new_artist_names = {a.name.lower() for a in matched_ref_artists}
-                if artist_name:
-                    for part in self._split_artist_string(artist_name):
-                        new_artist_names.add(part.strip().lower())
-                
-                if existing_artist_names and new_artist_names and not (existing_artist_names & new_artist_names):
-                    # Different artist → this is a homonym, not the same track
-                    artist_suffix = re.sub(r'[^\w]', '_', artist_name)
-                    artist_suffix = re.sub(r'_+', '_', artist_suffix).strip('_')
-                    new_track_id = f"{base_track_id}_{artist_suffix}"
-                    print(f"   ⚠️ Homonym detected! Existing track by [{', '.join(existing_artist_names)}], new track by [{', '.join(new_artist_names)}]")
-                    print(f"   📝 Using unique trackId: {new_track_id}")
-                    base_track_id = new_track_id
-                    
-                    # Re-check with the new artist-qualified trackId
-                    existing_track = self.db.track.find_first(
-                        where={'trackId': base_track_id},
-                        include={'Artist': True, 'ReferenceArtist': True, 'Album': True}
-                    )
-            
-            # Fallback: if not found by trackId, try matching by ISRC to avoid duplicates
+            # === UPSERT LOGIC: Match by ISRC + ReferenceArtist + Title ===
+            # All three must match to consider it the same track; otherwise create new.
             isrc_value = sanitized_data.get('ISRC', '').strip()
-            matched_by_isrc = False
-            if not existing_track and isrc_value:
-                existing_track = self.db.track.find_first(
-                    where={'ISRC': isrc_value},
+            existing_track = None
+            
+            new_ref_names = set()
+            if matched_ref_artists:
+                new_ref_names = {a.name.lower() for a in matched_ref_artists}
+            if artist_name:
+                for part in self._split_artist_string(artist_name):
+                    new_ref_names.add(part.strip().lower())
+            
+            can_upsert = bool(isrc_value) and bool(base_title) and bool(new_ref_names)
+            
+            if can_upsert:
+                isrc_candidates = self.db.track.find_many(
+                    where={'ISRC': {'equals': isrc_value, 'mode': 'insensitive'}},
                     include={'Artist': True, 'ReferenceArtist': True, 'Album': True}
                 )
-                if existing_track:
-                    matched_by_isrc = True
-                    print(f"   🔗 Matched existing track by ISRC '{isrc_value}' (trackId: {existing_track.trackId})")
-            
-            # Fallback: match by base_title + artist (Spotify model — one record per song)
-            # Slowed/Speed Up are separate tracks, so they skip this fallback.
-            SEPARATE_TRACK_TYPES = {'slowed', 'speed up', 'sped up'}
-            matched_by_title = False
-            is_separate_type = track_type.lower() in SEPARATE_TRACK_TYPES if track_type else False
-            
-            if not existing_track and base_title and not is_separate_type:
-                title_where = {'title': {'equals': base_title, 'mode': 'insensitive'}}
                 
-                # Try title + artist first (strict match to avoid merging homonyms)
-                if artist_name:
-                    primary_artist = self._split_artist_string(artist_name)[0] if self._split_artist_string(artist_name) else artist_name
-                    candidate = self.db.track.find_first(
-                        where={
-                            'AND': [
-                                title_where,
-                                {'originalArtist': {'contains': primary_artist, 'mode': 'insensitive'}}
-                            ]
-                        },
-                        include={'Artist': True, 'ReferenceArtist': True, 'Album': True}
-                    )
-                    if candidate:
+                for candidate in isrc_candidates:
+                    # Check title match (case-insensitive)
+                    candidate_title = (candidate.title or '').strip().lower()
+                    if candidate_title != base_title.strip().lower():
+                        continue
+                    
+                    # Check reference artist overlap
+                    candidate_ref_names = set()
+                    if candidate.ReferenceArtist:
+                        candidate_ref_names = {a.name.lower() for a in candidate.ReferenceArtist}
+                    if candidate.originalArtist:
+                        for part in self._split_artist_string(candidate.originalArtist):
+                            candidate_ref_names.add(part.strip().lower())
+                    
+                    if candidate_ref_names & new_ref_names:
                         existing_track = candidate
-                        matched_by_title = True
-                        print(f"   🔗 Matched existing track by title+artist: '{base_title}' / '{primary_artist}' (trackId: {existing_track.trackId})")
+                        print(f"   🔗 UPSERT MATCH (ISRC + Artist + Title): ISRC='{isrc_value}', title='{base_title}', artists={list(candidate_ref_names & new_ref_names)} → trackId={candidate.trackId}")
+                        break
                 
-                # If no artist match, try title-only (for cases where artist field differs)
                 if not existing_track:
-                    candidates = self.db.track.find_many(
-                        where=title_where,
-                        include={'Artist': True, 'ReferenceArtist': True, 'Album': True},
-                        take=5
-                    )
-                    if len(candidates) == 1:
-                        existing_track = candidates[0]
-                        matched_by_title = True
-                        print(f"   🔗 Matched existing track by title (unique): '{base_title}' (trackId: {existing_track.trackId})")
-                    elif len(candidates) > 1:
-                        print(f"   ⚠️ Multiple tracks with title '{base_title}' ({len(candidates)} found) — skipping title fallback to avoid merge error")
+                    print(f"   🆕 No 3-field match (ISRC='{isrc_value}', title='{base_title}', artists={list(new_ref_names)}) → will create new track")
+            else:
+                missing = []
+                if not isrc_value: missing.append('ISRC')
+                if not base_title: missing.append('title')
+                if not new_ref_names: missing.append('ReferenceArtist')
+                print(f"   🆕 Cannot upsert — missing: {', '.join(missing)} → will create new track")
+            
+            # When creating new, ensure trackId doesn't collide with a different track
+            if not existing_track:
+                collision = self.db.track.find_first(where={'trackId': base_track_id})
+                if collision:
+                    artist_suffix = re.sub(r'[^\w]', '_', artist_name) if artist_name else ''
+                    artist_suffix = re.sub(r'_+', '_', artist_suffix).strip('_')
+                    if artist_suffix:
+                        base_track_id = f"{base_track_id}_{artist_suffix}"
+                    collision2 = self.db.track.find_first(where={'trackId': base_track_id})
+                    if collision2:
+                        import time
+                        base_track_id = f"{base_track_id}_{int(time.time())}"
+                    print(f"   📝 trackId collision → using: {base_track_id}")
             
             if existing_track:
                 print(f"   📝 Updating existing track: {existing_track.id}")
@@ -846,6 +820,7 @@ class PrismaDatabaseService:
                     f'{file_field}_filename': file_filename,
                     f'{file_field}_filesize': file_filesize,
                     'isOriginal': True,
+                    'status': 'approved',
                 }
                 
                 # Add cover image: force replace if _force_cover_replace is set, otherwise only fill if empty
@@ -943,13 +918,8 @@ class PrismaDatabaseService:
                         raise
                 
                 print(f"   ✅ Track updated: {updated_track.id}")
-                effective_track_id = existing_track.trackId if (matched_by_isrc or matched_by_title) else base_track_id
-                if matched_by_title:
-                    action = 'updated_via_title'
-                elif matched_by_isrc:
-                    action = 'updated_via_isrc'
-                else:
-                    action = 'updated'
+                effective_track_id = existing_track.trackId
+                action = 'updated'
                 return {'trackId': effective_track_id, 'id': updated_track.id, 'action': action}
             
             else:
@@ -974,6 +944,7 @@ class PrismaDatabaseService:
                     'mood': PrismaJson(mood) if mood else PrismaJson([]),
                     'univers': PrismaJson(univers) if univers else PrismaJson([]),
                     'isOriginal': True,
+                    'status': 'approved',
                     f'{file_field}_filename': file_filename,
                     f'{file_field}_filesize': file_filesize,
                 }
