@@ -397,10 +397,17 @@ class PrismaDatabaseService:
             print(f"   🔍 No base_field found for type '{track_type}'")
             return None
         
-        # MP3-only types: Acapella, Intro, Instrumental, Short, Super Short — skip WAV
+        # MP3-only types — skip WAV
         if is_wav and base_field in MP3_ONLY_FIELDS:
             print(f"   ⏭️ {base_field} is MP3-only — WAV skipped")
             return None
+        
+        # Original/Extended Mp3 fields → their Wave equivalents when format is WAV
+        # e.g. originalTrackMp3Clean → originalTrackWaveClean
+        if is_wav and 'Mp3' in base_field:
+            field = base_field.replace('Mp3', 'Wave')
+            print(f"   🔍 WAV variant (Mp3→Wave): {base_field} → {field}")
+            return field
         
         if is_wav and base_field in FIELDS_WITH_WAV_VARIANTS:
             field = f"{base_field}Wav"
