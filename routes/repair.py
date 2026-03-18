@@ -8,7 +8,7 @@ from flask import Blueprint, jsonify
 repair_bp = Blueprint('repair', __name__)
 
 
-@repair_bp.route('/repair/track/<track_id>', methods=['POST'])
+@repair_bp.route('/repair/track/<track_id>', methods=['GET', 'POST'])
 def repair_track(track_id):
     """
     Repair one track: migrate old flat S3 paths to ISRC-prefixed paths,
@@ -29,7 +29,7 @@ def repair_track(track_id):
     return jsonify(result), 200
 
 
-@repair_bp.route('/repair/track/<track_id>/dry-run', methods=['POST', 'GET'])
+@repair_bp.route('/repair/track/<track_id>/dry-run', methods=['GET', 'POST'])
 def repair_track_dry_run(track_id):
     """Same as POST /repair/track/<id> but dry-run only (no DB/S3 changes)."""
     try:
