@@ -25,6 +25,7 @@ from routes.download import download_bp
 from routes.status import status_bp
 from routes.history import history_bp
 from routes.cleanup import cleanup_bp
+from routes.repair import repair_bp
 
 app.register_blueprint(main_bp)
 app.register_blueprint(upload_bp)
@@ -33,6 +34,7 @@ app.register_blueprint(download_bp)
 app.register_blueprint(status_bp)
 app.register_blueprint(history_bp)
 app.register_blueprint(cleanup_bp)
+app.register_blueprint(repair_bp)
 
 # =============================================================================
 # 3. INITIALIZE SERVICES & LOAD PERSISTED STATE

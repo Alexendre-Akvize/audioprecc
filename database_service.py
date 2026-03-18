@@ -13,6 +13,7 @@ Setup:
 import os
 import re
 import json
+import uuid
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 import threading
@@ -702,20 +703,34 @@ class PrismaDatabaseService:
                     # The Titre field already contains the variant (e.g., "Track Name - Main")
                     full_title = sanitized_data.get('Titre', '')
                     print(f"   📝 Title for filename: '{full_title}'")
-                    
+
                     audio_filename = s3.generate_audio_filename(
                         full_title,
                         None,  # Type is already in title
                         format_type,
                         file_url
                     )
-                    
-                    # Upload to S3 (stored in tracks/mp3/ or tracks/wav/)
+
+                    # Use ISRC as the S3 sub-folder so homonyms never overwrite each other.
+                    # When ISRC is missing we use a unique id (never title-only) to avoid collisions.
+                    track_isrc = sanitized_data.get('ISRC', '').strip()
+                    if track_isrc:
+                        s3_folder = track_isrc
+                    else:
+                        # Unique prefix: no ISRC → avoid title-only folder (e.g. "Hello" for 2 artists)
+                        s3_folder = 'unk_' + uuid.uuid4().hex[:12]
+                        print(f"   ⚠️  No ISRC — using unique folder prefix to avoid homonym overwrite")
+                    # Sanitize: strip characters that are invalid in S3 key segments
+                    s3_folder = re.sub(r'[^\w.\-]', '_', s3_folder).strip('_') or s3_folder
+                    print(f"   📁 S3 folder prefix: '{s3_folder}'")
+
+                    # Upload to S3 (stored in tracks/mp3/{s3_folder}/ or tracks/wav/{s3_folder}/)
                     print(f"   📤 Uploading to S3 ({'WAV' if is_wav else 'MP3'} folder)...")
                     result = s3.upload_audio_file(
                         source_url=file_url,
                         filename=audio_filename,
                         is_wav=is_wav,
+                        folder_prefix=s3_folder,
                     )
                     
                     # Store just the filename (like Keystone does)

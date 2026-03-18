@@ -992,7 +992,6 @@ def bulk_import_background_thread(dropbox_token, dropbox_team_member_id, folder_
                     api_headers['Dropbox-API-Path-Root'] = json.dumps({'.tag': 'namespace_id', 'namespace_id': namespace_id})
                 return api_headers
 
-            def move_to_done_in_dropbox(filename):
                 """Move a file to /track done folder in Dropbox after successful processing."""
                 with dropbox_paths_lock:
                     dropbox_path = dropbox_paths.get(filename)

@@ -3,8 +3,8 @@ S3 Service for ID By Rivoli
 Uploads audio files and images to S3 storage matching Keystone's storage pattern.
 
 Keystone stores files as:
-- Audio files: tracks/mp3/{filename} or tracks/wav/{filename}
-  Database stores: {field}_filename = just the filename, {field}_filesize = size in bytes
+- Audio files: tracks/mp3/{folder_prefix}/{filename} or tracks/wav/{folder_prefix}/{filename}
+  folder_prefix = ISRC or unique id to avoid homonym overwrites. DB stores {field}_filename = "{folder_prefix}/{filename}"
 - Images: tracks/cover/{id}.{extension}
   Database stores: {field}_id, {field}_filesize, {field}_width, {field}_height, {field}_extension
 """
@@ -225,28 +225,46 @@ class S3Service:
         source_url: str,
         filename: str,
         is_wav: bool = False,
+        folder_prefix: str = '',
     ) -> AudioUploadResult:
         """
         Download audio file from URL and upload to S3.
-        
+
         Args:
             source_url: URL to download the file from
             filename: Target filename (e.g., "Track Name - Main.mp3")
             is_wav: True for WAV files (tracks/wav/), False for MP3 (tracks/mp3/)
-        
+            folder_prefix: Unique sub-folder inside the audio base path, used to
+                prevent collisions between tracks that share the same title.
+                Typically the track ISRC (e.g. "GBBKS1500214").
+                When set the S3 key becomes:
+                    tracks/mp3/{folder_prefix}/{filename}
+                and the stored filename becomes:
+                    {folder_prefix}/{filename}
+                so the CDN URL stays consistent with the database value.
+
         Returns:
             AudioUploadResult with filename and filesize (matching Keystone's pattern)
         """
         if not self._configured:
             raise Exception("S3 not configured")
-        
+
         # Download the file
         content, filesize = self.download_file(source_url)
-        
+
         # Determine S3 path based on file type
         base_path = AUDIO_WAV_PATH if is_wav else AUDIO_MP3_PATH
-        s3_key = f"{base_path}/{filename}"
-        
+
+        # Always use a sub-folder to avoid homonym collisions (same title, different artists).
+        # If no prefix provided, generate one so we never write to flat tracks/mp3/Title.mp3.
+        if not folder_prefix or not str(folder_prefix).strip():
+            folder_prefix = uuid.uuid4().hex[:12]
+            print(f"   ⚠️ S3 audio upload: no folder_prefix — using unique prefix {folder_prefix} (avoid homonym overwrite)")
+
+        # Build the stored filename: {folder_prefix}/{filename} for correct CDN URLs
+        stored_filename = f"{folder_prefix}/{filename}"
+        s3_key = f"{base_path}/{stored_filename}"
+
         # Determine content type
         extension = filename.rsplit('.', 1)[-1].lower() if '.' in filename else 'mp3'
         content_types = {
@@ -257,9 +275,9 @@ class S3Service:
             'm4a': 'audio/mp4',
         }
         content_type = content_types.get(extension, 'audio/mpeg')
-        
+
         print(f"   📤 Uploading to S3: {s3_key}")
-        
+
         # Upload to S3
         self._client.upload_fileobj(
             BytesIO(content),
@@ -270,12 +288,12 @@ class S3Service:
                 'ACL': 'public-read',
             },
         )
-        
-        print(f"   ✅ Uploaded: {filename} ({filesize / 1024:.1f} KB)")
-        
-        # Return just the filename (not the full path) - this is what Keystone stores
+
+        print(f"   ✅ Uploaded: {stored_filename} ({filesize / 1024:.1f} KB)")
+
+        # Return stored_filename (may include prefix sub-folder) — this is what the DB stores
         return AudioUploadResult(
-            filename=filename,
+            filename=stored_filename,
             filesize=filesize,
         )
     
